@@ -1,0 +1,19 @@
+{
+  "name": "devops-deployment-panel",
+  "version": "1.0.0",
+  "description": "Vercel-like deployment platform",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "build": "npm run build --workspace=frontend",
+    "docker:up": "docker-compose up --build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
