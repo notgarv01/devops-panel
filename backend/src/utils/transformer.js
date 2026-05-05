@@ -43,9 +43,21 @@ const generateVercelConfig = (projectType, config = {}) => {
       use: '@vercel/node'
     });
 
-    // For API-only projects, all routes go to the serverless function
+    // Route ALL traffic to the serverless function
     baseConfig.rewrites = [
       { source: '/(.*)', destination: '/api/index.js' }
+    ];
+
+    // Headers for CORS
+    baseConfig.headers = [
+      {
+        source: '/(.*)',
+        headers: [
+          { key: 'Access-Control-Allow-Origin', value: '*' },
+          { key: 'Access-Control-Allow-Methods', value: 'GET, POST, PUT, DELETE, OPTIONS' },
+          { key: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization' }
+        ]
+      }
     ];
 
     return baseConfig;
@@ -129,14 +141,38 @@ const transformServerFile = async (workDir, serverFile) => {
   // Vercel expects: module.exports = (req, res) => { ... }
   // For Express: wrap the app in a serverless handler
   if (content.includes('app.listen')) {
-    // Create a Vercel serverless handler that wraps the Express app
-    const handler = `const { createServer } = require('http');
+    // Get all JS files in the same directory as server file for copying
+    const serverDir = path.dirname(serverFile.path);
 
-// Import or define Express app
-const app = require('../app');
+    // Create a Vercel serverless handler
+    const handler = `// Vercel Serverless Function
+const { createServer } = require('http');
+const path = require('path');
 
+// Load Express app - look for app.js in the same directory
+let app;
+try {
+  app = require('./app');
+} catch (e) {
+  // If no app.js, create minimal Express
+  const express = require('express');
+  app = express();
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
+
+  // Add health check
+  app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: Date.now() });
+  });
+
+  // Root handler
+  app.get('/', (req, res) => {
+    res.json({ message: 'API running', endpoints: ['/api/health'] });
+  });
+}
+
+// Vercel serverless handler
 module.exports = (req, res) => {
-  // Vercel serverless handler - wraps Express app in HTTP server
   const server = createServer(app);
   server.emit('request', req, res);
 };
@@ -257,6 +293,40 @@ exports.transformForDeployment = async (workDir, projectType, options = {}) => {
     projectType = 'MERN';
     results.mernStructure = mernResult;
   }
+
+  // Helper to flatten nested project structures (backend/, src/, etc.) to root
+  const flattenStructure = async () => {
+    const entries = await fs.readdir(workDir, { withFileTypes: true });
+    const dirsToFlatten = entries.filter(e => e.isDirectory() &&
+      ['backend', 'src', 'server', 'app'].includes(e.name.toLowerCase()));
+
+    for (const dir of dirsToFlatten) {
+      const subDir = path.join(workDir, dir.name);
+      try {
+        const subEntries = await fs.readdir(subDir, { withFileTypes: true });
+        for (const entry of subEntries) {
+          const srcPath = path.join(subDir, entry.name);
+          const destPath = path.join(workDir, entry.name);
+          if (!fs.existsSync(destPath)) {
+            if (entry.isDirectory()) {
+              await fs.mkdir(destPath, { recursive: true });
+              const subFiles = await fs.readdir(srcPath, { withFileTypes: true });
+              for (const file of subFiles) {
+                await fs.copyFile(path.join(srcPath, file.name), path.join(destPath, file.name));
+              }
+            } else {
+              await fs.copyFile(srcPath, destPath);
+            }
+          }
+        }
+        // Remove the flattened subdirectory
+        fs.rmSync(subDir, { recursive: true, force: true });
+      } catch {}
+    }
+  };
+
+  // Flatten nested structures like backend/, src/ to root level
+  await flattenStructure();
 
   // 1. Find and potentially transform server file
   if (projectType === PROJECT_TYPES.NODE_API || projectType === 'MERN') {
