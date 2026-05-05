@@ -151,6 +151,13 @@ const runTransformationPipeline = async (io, sessionId, config) => {
         throw new Error(`Clone failed: ${cloneResult.error}`);
       }
       actualBranch = cloneResult.branch; // Use the actual branch that was cloned
+
+      // Remove .git folder to avoid history conflicts when pushing to new repo
+      const gitDir = path.join(workDir, '.git');
+      if (fs.existsSync(gitDir)) {
+        fs.rmSync(gitDir, { recursive: true, force: true });
+      }
+
       logs.success(`Repository cloned (${actualBranch} branch) to ${workDir}`);
     } else {
       // Use local path directly
@@ -365,7 +372,11 @@ const runTransformationPipeline = async (io, sessionId, config) => {
 
           try {
             const createData = {
-              name: cleanName
+              name: cleanName,
+              gitRepository: {
+                type: 'github',
+                repo: `${owner}/${cleanName}`
+              }
             };
             console.log(`[Pipeline:${sessionId}] createProject payload:`, JSON.stringify(createData));
 
