@@ -8,6 +8,12 @@ const setupSocket = (io) => {
       console.log(`Socket ${socket.id} joined deployment ${deploymentId}`);
     });
 
+    // Join pipeline session for real-time logs
+    socket.on('join-pipeline', (sessionId) => {
+      socket.join(sessionId);
+      console.log(`Socket ${socket.id} joined pipeline ${sessionId}`);
+    });
+
     // Leave deployment room
     socket.on('leave-deployment', (deploymentId) => {
       socket.leave(deploymentId);

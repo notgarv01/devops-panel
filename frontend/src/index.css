@@ -9,10 +9,12 @@
 }
 
 body {
-  font-family: 'Inter', sans-serif;
-  background-color: #0a0a0f;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background-color: #050505;
   color: #e5e7eb;
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 ::-webkit-scrollbar {
@@ -21,14 +23,41 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #1a1a25;
+  background: #0F0F0F;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #353545;
+  background: #2a2a2a;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #454555;
+  background: #3a3a3a;
+}
+
+/* Glassmorphism utility */
+.glass {
+  background: rgba(26, 26, 26, 0.8);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Glow effects */
+.glow-blue {
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+}
+
+.glow-purple {
+  box-shadow: 0 0 20px rgba(123, 97, 255, 0.3);
+}
+
+/* Neon text */
+.text-neon-blue {
+  color: #00D4FF;
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+}
+
+.text-neon-purple {
+  color: #7B61FF;
+  text-shadow: 0 0 10px rgba(123, 97, 255, 0.5);
 }

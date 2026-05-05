@@ -1,9 +1,10 @@
 import { io } from 'socket.io-client';
 
-const WS_URL = import.meta.env.VITE_WS_URL || '/';
+// Use relative URL to work through Vite proxy
+const WS_URL = import.meta.env.VITE_WS_URL || '';
 
-export const socket = io(WS_URL, {
-  autoConnect: false,
+export const socket = io(WS_URL || window.location.origin, {
+  autoConnect: true,
   reconnection: true,
   reconnectionAttempts: 5,
   reconnectionDelay: 1000,

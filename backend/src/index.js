@@ -6,6 +6,11 @@ const { Server } = require('socket.io');
 require('dotenv').config();
 
 const deployRoutes = require('./routes/deploy.routes');
+const intakeRoutes = require('./routes/intake.routes');
+const transformRoutes = require('./routes/transform.routes');
+const shipRoutes = require('./routes/ship.routes');
+const vercelRoutes = require('./routes/vercel.routes');
+const pipelineRoutes = require('./routes/pipeline.routes');
 const Deploy = require('./models/Deploy');
 const { setupSocket } = require('./socket/socketHandler');
 const { cleanupDeadContainers } = require('./utils/dockerOperations');
@@ -30,6 +35,11 @@ app.set('io', io);
 
 // Routes
 app.use('/api/deploy', deployRoutes);
+app.use('/api/intake', intakeRoutes);
+app.use('/api/transform', transformRoutes);
+app.use('/api/ship', shipRoutes);
+app.use('/api/vercel', vercelRoutes);
+app.use('/api/pipeline', pipelineRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
