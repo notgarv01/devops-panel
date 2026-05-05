@@ -192,8 +192,30 @@ const runTransformationPipeline = async (io, sessionId, config) => {
 
     logs.success(`Created ${transformResult.files.length} deployment files`);
     transformResult.files.forEach(f => {
-      logs.emit('info', `  + ${path.basename(f)}`);
+      logs.emit('info', `  + ${path.relative(workDir, f)}`);
     });
+
+    // Log directory structure for debugging
+    const listDir = async (dir, prefix = '') => {
+      try {
+        const entries = await fs.readdir(dir, { withFileTypes: true });
+        for (const entry of entries.slice(0, 20)) { // Limit to 20 entries
+          logs.emit('info', `  ${prefix}${entry.name}${entry.isDirectory() ? '/' : ''}`);
+          if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') {
+            await listDir(path.join(dir, entry.name), prefix + '  ');
+          }
+        }
+      } catch {}
+    };
+    logs.emit('info', `Directory structure:`);
+    await listDir(workDir);
+
+    // Log vercel.json content for debugging
+    const vercelJsonPath = path.join(workDir, 'vercel.json');
+    if (fs.existsSync(vercelJsonPath)) {
+      const vercelContent = fs.readFileSync(vercelJsonPath, 'utf8');
+      logs.emit('info', `vercel.json content: ${vercelContent}`);
+    }
 
     // Log detailed transformations
     if (transformResult.serverTransformed) {
@@ -264,8 +286,18 @@ const runTransformationPipeline = async (io, sessionId, config) => {
         fs.writeFileSync(gitignorePath, gitignoreContent + '\nnode_modules/\n');
       }
 
+      // Force sync file system to ensure all files are written to disk
+      fs.sync && fs.sync();
+
       logs.emit('info', `Git add...`);
       await git.add('.');
+
+      // Explicitly add vercel.json to ensure it's staged
+      const vercelJsonPath = path.join(workDir, 'vercel.json');
+      if (fs.existsSync(vercelJsonPath)) {
+        await git.add('vercel.json');
+        logs.emit('info', `Staged vercel.json`);
+      }
 
       logs.emit('info', `Git commit...`);
       await git.commit('Deploy via DevOps Panel');
