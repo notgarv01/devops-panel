@@ -125,44 +125,62 @@ const transformServerFile = async (workDir, serverFile) => {
 
   let content = serverFile.content || await fs.readFile(serverFile.path, 'utf8');
 
-  // Transform: Replace app.listen() with export default app
+  // Transform Express app for Vercel serverless
+  // Vercel expects: module.exports = (req, res) => { ... }
+  // For Express: wrap the app in a serverless handler
   if (content.includes('app.listen')) {
-    content = content.replace(
-      /app\.listen\s*\(\s*(\d+|\w+)\s*(,\s*(?:async\s*)?(?:\([^)]*\)\s*)?(?:=>\s*)?{[^}]*})?\s*\)/g,
-      'export default app;'
-    );
+    // Create a Vercel serverless handler that wraps the Express app
+    const handler = `const { createServer } = require('http');
+
+// Import or define Express app
+const app = require('../app');
+
+module.exports = (req, res) => {
+  // Vercel serverless handler - wraps Express app in HTTP server
+  const server = createServer(app);
+  server.emit('request', req, res);
+};
+`;
+    content = handler;
     result.transformed = true;
   }
 
   if (content.includes('http.createServer')) {
-    content = content.replace(
-      /http\.createServer\s*\(\s*\(?\s*req\s*,?\s*res\s*\)?\s*=>/g,
-      'export default (req, res) => {'
-    ).replace(
-      /}\s*\)\s*\(\s*\)\s*;?\s*$/,
-      '};'
-    );
+    content = `
+module.exports = (req, res) => {
+  // Vercel serverless handler
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/json');
+  res.end(JSON.stringify({ status: 'ok', timestamp: Date.now() }));
+};
+`;
     result.transformed = true;
   }
 
-  // Ensure it ends with export default
-  if (!content.includes('export default')) {
-    const lines = content.trim().split('\n');
-    const lastNonEmpty = [...lines].reverse().find(l => l.trim().length > 0);
-    if (!lastNonEmpty.includes('export default')) {
-      content = content.trim() + '\nexport default app;';
-      result.transformed = true;
-    }
-  }
+  // If no known pattern, wrap in serverless handler
+  if (!content.includes('module.exports') && !content.includes('export default')) {
+    content = `
+const app = require('./app');
 
-  // Remove CORS issues for serverless
-  if (!content.includes('cors()') && !content.includes("require('cors')") && !content.includes('"cors"')) {
-    // Add CORS middleware if not present
+module.exports = (req, res) => {
+  const server = createServer(app);
+  server.emit('request', req, res);
+};
+`;
+    result.transformed = true;
   }
 
   // Write to api/index.js
   await fs.writeFile(apiIndexPath, content);
   result.files.push(apiIndexPath);
+
+  // Copy app.js to api folder if it exists at root (for the handler to import)
+  const appPath = path.join(workDir, 'app.js');
+  if (fs.existsSync(appPath) && serverFile.path !== appPath) {
+    const apiAppPath = path.join(apiDir, 'app.js');
+    await fs.copyFile(appPath, apiAppPath);
+    result.files.push(apiAppPath);
+  }
 
   // If original file is in a different location, optionally remove it
   if (path.dirname(serverFile.path) !== apiDir) {
@@ -177,6 +195,17 @@ const transformServerFile = async (workDir, serverFile) => {
 const injectVercelJson = async (workDir, projectType, config = {}) => {
   const vercelConfig = generateVercelConfig(projectType, config);
   const vercelJsonPath = path.join(workDir, 'vercel.json');
+
+  // For Node API, ensure the serverless function entry is clear
+  if (projectType === PROJECT_TYPES.NODE_API) {
+    vercelConfig.functions = {
+      'api/index.js': {
+        'runtime': 'nodejs18.x',
+        'memory': 1024,
+        'maxDuration': 10
+      }
+    };
+  }
 
   await fs.writeFile(vercelJsonPath, JSON.stringify(vercelConfig, null, 2));
 
@@ -205,7 +234,8 @@ const injectPackageJsonType = async (workDir) => {
   const pkgPath = path.join(workDir, 'package.json');
   try {
     const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
-    pkg.type = 'module';
+    // Keep CommonJS for serverless - Vercel handles ESM internally
+    // pkg.type = 'module';
     await fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2));
     return { path: pkgPath, updated: true };
   } catch {
