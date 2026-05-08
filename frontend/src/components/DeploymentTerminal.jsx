@@ -155,7 +155,7 @@ export default function DeploymentTerminal({ sessionId, title = 'Deployment Term
       {/* Terminal Output */}
       <div
         ref={logsContainerRef}
-        className="flex-1 overflow-y-auto p-4 font-mono text-sm bg-[#050505] select-text"
+        className="flex-1 overflow-y-auto p-4 font-mono text-sm bg-[#050505] select-text scroll-smooth"
       >
         {logs.length > 0 ? (
           <div className="space-y-1">

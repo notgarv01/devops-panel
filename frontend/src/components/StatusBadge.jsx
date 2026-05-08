@@ -2,16 +2,22 @@ import { useState, useEffect } from 'react';
 import { Wifi, WifiOff, Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react';
 
 const STATUS_CONFIG = {
+  idle: { color: 'text-zinc-400', bg: 'bg-zinc-500/20', dot: 'bg-zinc-400', label: 'Ready' },
   pending: { color: 'text-zinc-400', bg: 'bg-zinc-500/20', dot: 'bg-zinc-400', label: 'Pending' },
   scanning: { color: 'text-blue-400', bg: 'bg-blue-500/20', dot: 'bg-blue-400 animate-pulse', label: 'Scanning' },
+  analyzing: { color: 'text-cyan-400', bg: 'bg-cyan-500/20', dot: 'bg-cyan-400 animate-pulse', label: 'Analyzing' },
+  transmuting: { color: 'text-violet-400', bg: 'bg-violet-500/20', dot: 'bg-violet-400 animate-pulse', label: 'Transmuting' },
+  webhook: { color: 'text-amber-400', bg: 'bg-amber-500/20', dot: 'bg-amber-400 animate-pulse', label: 'Webhook' },
   cloning: { color: 'text-purple-400', bg: 'bg-purple-500/20', dot: 'bg-purple-400 animate-pulse', label: 'Cloning' },
+  transforming: { color: 'text-violet-400', bg: 'bg-violet-500/20', dot: 'bg-violet-400 animate-pulse', label: 'Transforming' },
+  pushing: { color: 'text-amber-400', bg: 'bg-amber-500/20', dot: 'bg-amber-400 animate-pulse', label: 'Pushing' },
   building: { color: 'text-amber-400', bg: 'bg-amber-500/20', dot: 'bg-amber-400 animate-pulse', label: 'Building' },
+  deploying: { color: 'text-cyan-400', bg: 'bg-cyan-500/20', dot: 'bg-cyan-400 animate-pulse', label: 'Deploying' },
   running: { color: 'text-emerald-400', bg: 'bg-emerald-500/20', dot: 'bg-emerald-400 animate-pulse', label: 'Live' },
   success: { color: 'text-emerald-400', bg: 'bg-emerald-500/20', dot: 'bg-emerald-400', label: 'Live' },
+  live: { color: 'text-emerald-400', bg: 'bg-emerald-500/20', dot: 'bg-emerald-400', label: 'Live' },
   stopped: { color: 'text-zinc-500', bg: 'bg-zinc-500/20', dot: 'bg-zinc-500', label: 'Stopped' },
   error: { color: 'text-red-400', bg: 'bg-red-500/20', dot: 'bg-red-400', label: 'Failed' },
-  transforming: { color: 'text-violet-400', bg: 'bg-violet-500/20', dot: 'bg-violet-400 animate-pulse', label: 'Transforming' },
-  deploying: { color: 'text-cyan-400', bg: 'bg-cyan-500/20', dot: 'bg-cyan-400 animate-pulse', label: 'Deploying' },
 };
 
 export default function StatusBadge({ status, size = 'md', showIcon = true, className = '' }) {
@@ -32,10 +38,14 @@ export default function StatusBadge({ status, size = 'md', showIcon = true, clas
   const icons = {
     running: <Wifi className={`${size === 'sm' ? 'w-3 h-3' : 'w-4 h-4'}`} />,
     success: <CheckCircle2 className={`${size === 'sm' ? 'w-3 h-3' : 'w-4 h-4'}`} />,
+    live: <CheckCircle2 className={`${size === 'sm' ? 'w-3 h-3' : 'w-4 h-4'}`} />,
     error: <AlertTriangle className={`${size === 'sm' ? 'w-3 h-3' : 'w-4 h-4'}`} />,
     building: <Loader2 className={`${size === 'sm' ? 'w-3 h-3' : 'w-4 h-4'} animate-spin`} />,
     scanning: <Loader2 className={`${size === 'sm' ? 'w-3 h-3' : 'w-4 h-4'} animate-spin`} />,
+    analyzing: <Loader2 className={`${size === 'sm' ? 'w-3 h-3' : 'w-4 h-4'} animate-spin`} />,
+    transmuting: <Loader2 className={`${size === 'sm' ? 'w-3 h-3' : 'w-4 h-4'} animate-spin`} />,
     transforming: <Loader2 className={`${size === 'sm' ? 'w-3 h-3' : 'w-4 h-4'} animate-spin`} />,
+    pushing: <Loader2 className={`${size === 'sm' ? 'w-3 h-3' : 'w-4 h-4'} animate-spin`} />,
     deploying: <Loader2 className={`${size === 'sm' ? 'w-3 h-3' : 'w-4 h-4'} animate-spin`} />,
   };
 

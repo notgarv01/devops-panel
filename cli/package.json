@@ -1,0 +1,32 @@
+{
+  "name": "dp-cli",
+  "version": "1.0.0",
+  "description": "DevOps Panel CLI - The Ghost in the Machine",
+  "main": "bin/dp.js",
+  "bin": {
+    "dp": "./bin/dp.js"
+  },
+  "scripts": {
+    "test": "echo \"No tests yet\"",
+    "prepublish": "chmod +x bin/dp.js"
+  },
+  "keywords": [
+    "devops",
+    "cli",
+    "deployment",
+    "infrastructure",
+    "vercel",
+    "github"
+  ],
+  "author": "DevOps Panel",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^11.1.0",
+    "gradient-string": "^2.0.2",
+    "ora": "^5.4.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

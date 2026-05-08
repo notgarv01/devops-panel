@@ -10,11 +10,13 @@ export const useDeployStore = create((set, get) => ({
   projectData: null,
   deployResult: null,
   error: null,
+  webhookConfigured: false,
+  webhookTriggered: false,
 
   // Progress tracking
   progress: {
     step: 0,
-    total: 4,
+    total: 7,
     label: '',
     percentage: 0
   },
@@ -30,13 +32,20 @@ export const useDeployStore = create((set, get) => ({
 
   setTokens: (githubToken, vercelToken) => set({ githubToken, vercelToken }),
 
-  addLog: (log) => set((state) => ({
-    logs: [...state.logs, {
-      id: `${Date.now()}-${Math.random()}`,
-      timestamp: new Date(),
-      ...log
-    }]
-  })),
+  addLog: (log) => set((state) => {
+    // Prevent duplicate consecutive logs
+    const lastLog = state.logs[state.logs.length - 1];
+    if (lastLog && lastLog.message === log.message && lastLog.level === log.level) {
+      return state;
+    }
+    return {
+      logs: [...state.logs, {
+        id: `${Date.now()}-${Math.random()}`,
+        timestamp: new Date(),
+        ...log
+      }]
+    };
+  }),
 
   clearLogs: () => set({ logs: [] }),
 
@@ -145,8 +154,13 @@ export const useDeployStore = create((set, get) => ({
     projectData: null,
     deployResult: null,
     error: null,
-    progress: { step: 0, total: 4, label: '', percentage: 0 }
-  })
+    progress: { step: 0, total: 7, label: '', percentage: 0 },
+    webhookConfigured: false
+  }),
+
+  setWebhookConfigured: (configured) => set({ webhookConfigured: configured }),
+
+  setWebhookTriggered: (triggered) => set({ webhookTriggered: triggered })
 }));
 
 // Socket integration
@@ -178,7 +192,16 @@ export const initializeSocketListeners = () => {
     const state = useDeployStore.getState();
     if (!state.sessionId || progress.sessionId === state.sessionId) {
       useDeployStore.getState().setProgress(progress);
-      const statusMap = { 1: 'analyzing', 2: 'transforming', 3: 'pushing', 4: 'deploying' };
+      // Updated status map for 7-step pipeline
+      const statusMap = {
+        1: 'scanning',   // Fetching project code
+        2: 'analyzing',  // Analyzing project structure
+        3: 'transmuting', // Transmuting source code (NEW)
+        4: 'transforming', // Generating deployment files
+        5: 'pushing',    // Syncing to GitHub
+        6: 'webhook',    // Installing webhook
+        7: 'deploying'   // Deploying to Vercel
+      };
       useDeployStore.getState().setStatus(statusMap[progress.step] || 'transforming');
     }
   };
@@ -188,6 +211,29 @@ export const initializeSocketListeners = () => {
   socket.on('pipeline-error', (err) => {
     console.log('[Socket] pipeline-error received:', err);
     useDeployStore.getState().setError(err.error);
+  });
+
+  // Webhook-triggered events
+  socket.on('webhook-triggered', (data) => {
+    console.log('[Socket] webhook-triggered:', data);
+    useDeployStore.getState().setWebhookTriggered(true);
+    useDeployStore.getState().setSessionId(data.sessionId);
+    useDeployStore.getState().setStatus('transmuting');
+    useDeployStore.getState().addLog({
+      level: 'info',
+      message: `Auto-transmutation triggered by webhook from ${data.repo}`
+    });
+  });
+
+  // Project status updates from orchestrator
+  socket.on('project-update', (data) => {
+    console.log('[Socket] project-update:', data);
+    // This is handled by the ProjectsGrid component via ProjectsGrid's own socket listener
+    // Or we can broadcast to a global store
+    useDeployStore.getState().addLog({
+      level: 'info',
+      message: `[Fleet] ${data.projectName} → ${data.status}`
+    });
   });
 
   return () => {

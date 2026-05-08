@@ -313,4 +313,70 @@ router.get('/deployment/:id', async (req, res) => {
   }
 });
 
+// ===== Web Vitals (Performance Metrics) =====
+router.get('/vitals/:projectId', async (req, res) => {
+  const { projectId } = req.params;
+  const vercelToken = req.headers['x-vercel-token'] || req.query.vercelToken;
+
+  if (!vercelToken) {
+    return res.status(401).json({ error: 'Vercel token required' });
+  }
+
+  try {
+    const vercel = createVercelService(vercelToken);
+    const metrics = await vercel.getPerformanceMetrics(projectId);
+    res.json(metrics);
+  } catch (error) {
+    console.error('Web Vitals error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ===== Edge Config (Global Variables) =====
+router.get('/edge-config', async (req, res) => {
+  const vercelToken = req.headers['x-vercel-token'] || req.query.vercelToken;
+
+  if (!vercelToken) {
+    return res.status(401).json({ error: 'Vercel token required' });
+  }
+
+  try {
+    const vercel = createVercelService(vercelToken);
+    const edgeConfig = await vercel.request('GET', '/v1/edge-config');
+    res.json(edgeConfig || { items: [], configured: true });
+  } catch (error) {
+    console.log('[Edge Config] Not configured:', error.message);
+    res.json({ items: [], configured: false });
+  }
+});
+
+router.patch('/edge-config', async (req, res) => {
+  const vercelToken = req.headers['x-vercel-token'] || req.query.vercelToken;
+  const { items } = req.body;
+
+  if (!vercelToken) {
+    return res.status(401).json({ error: 'Vercel token required' });
+  }
+
+  if (!items || !Array.isArray(items)) {
+    return res.status(400).json({ error: 'items array required' });
+  }
+
+  try {
+    const vercel = createVercelService(vercelToken);
+    const result = await vercel.request('PATCH', '/v1/edge-config', {
+      items: items.map(item => ({
+        operation: item.operation || 'upsert',
+        key: item.key,
+        value: item.value
+      }))
+    });
+
+    res.json({ success: true, updated: items.length });
+  } catch (error) {
+    console.error('Edge Config update error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;

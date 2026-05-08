@@ -7,6 +7,34 @@ const { analyzeProject, PROJECT_TYPES } = require('../utils/analyzer');
 const { transformForDeployment } = require('../utils/transformer');
 const { createGitHubService } = require('./github.service');
 const { createVercelService } = require('./vercel.service');
+const Project = require('../models/Project');
+const { createAIService, parseBuildError } = require('./ai.service');
+const { SecretSentinel } = require('./secretSentinel');
+
+// Project persistence helper
+const updateProjectStatus = async (projectName, updates) => {
+  try {
+    await Project.findOneAndUpdate(
+      { name: projectName },
+      { ...updates, updatedAt: new Date() },
+      { new: true, upsert: false }
+    );
+  } catch (error) {
+    console.log(`[Project] Failed to update status: ${error.message}`);
+  }
+};
+
+// Emit project status change via socket
+const emitProjectUpdate = (io, projectName, status, data = {}) => {
+  if (io) {
+    io.emit('project-update', {
+      projectName,
+      status,
+      timestamp: new Date(),
+      ...data
+    });
+  }
+};
 
 class LogStreamer {
   constructor(sessionId) {
@@ -73,20 +101,17 @@ class LogStreamer {
 
 // Clone GitHub repo to temp directory
 const cloneRepo = async (repoUrl, targetDir, preferredBranch = null) => {
-  // Clean up if exists
   if (fs.existsSync(targetDir)) {
     fs.rmSync(targetDir, { recursive: true, force: true });
   }
   fs.mkdirSync(targetDir, { recursive: true });
 
-  // Build branch priority: explicit branch first, then main/master/default
   const branchPriority = preferredBranch
     ? [preferredBranch, ...['main', 'master'].filter(b => b !== preferredBranch)]
     : ['main', 'master'];
 
   const git = simpleGit();
 
-  // Try each branch in priority order
   for (const branch of branchPriority) {
     try {
       await git.clone(repoUrl, targetDir, ['--branch', branch, '--single-branch', '--depth', '1']);
@@ -94,12 +119,10 @@ const cloneRepo = async (repoUrl, targetDir, preferredBranch = null) => {
       const branchOutput = (await actualGit.branch()).current;
       return { success: true, path: targetDir, branch: branchOutput || branch };
     } catch (error) {
-      // Branch not found, try next one
       continue;
     }
   }
 
-  // If all specific branches fail, try cloning without branch spec (gets default)
   try {
     await git.clone(repoUrl, targetDir, ['--depth', '1']);
     const actualGit = simpleGit(targetDir);
@@ -110,9 +133,140 @@ const cloneRepo = async (repoUrl, targetDir, preferredBranch = null) => {
   }
 };
 
-// Check if string is a GitHub URL
 const isGitHubUrl = (str) => {
   return str && (str.includes('github.com') || str.startsWith('https://'));
+};
+
+// ===== STEP 3: DEEP TRANSMUTATION (Source Code Fixer) =====
+const transmuteSourceCode = async (workDir, logs, options = {}) => {
+  const { projectType, envVars = [] } = options;
+  const isViteProject = projectType === PROJECT_TYPES.FRONTEND_FRAMEWORK;
+
+  const results = {
+    filesModified: 0,
+    fixes: []
+  };
+
+  const transmutationRules = [
+    {
+      pattern: /(https?:\/\/)localhost:(\d+)/gi,
+      replace: (match, protocol, port) => {
+        results.fixes.push({
+          file: 'pattern-replace',
+          find: match,
+          replace: `${protocol}process.env.VITE_API_URL`
+        });
+        return `${protocol}process.env.VITE_API_URL`;
+      }
+    },
+    {
+      pattern: /fetch\s*\(\s*['"]http:\/\/localhost:\d+[^'"]*['"]\s*/gi,
+      replace: (match) => {
+        results.fixes.push({
+          file: 'pattern-replace',
+          find: match,
+          replace: 'fetch(process.env.VITE_API_URL + '
+        });
+        return match.replace(/fetch\s*\(\s*['"]http:\/\/localhost:\d+/gi, 'fetch(process.env.VITE_API_URL + "');
+      }
+    },
+    {
+      pattern: /baseURL:\s*['"]http:\/\/localhost:\d+[^'"]*['"]/gi,
+      replace: (match) => {
+        results.fixes.push({
+          file: 'pattern-replace',
+          find: match,
+          replace: "baseURL: process.env.VITE_API_URL"
+        });
+        return "baseURL: process.env.VITE_API_URL";
+      }
+    },
+    {
+      pattern: /(const|let|var)\s+API_URL\s*=\s*['"]https?:\/\/localhost:\d+[^'"]*['"]/gi,
+      replace: (match) => {
+        results.fixes.push({
+          file: 'pattern-replace',
+          find: match,
+          replace: "$1API_URL = process.env.VITE_API_URL || ''"
+        });
+        return "$1API_URL = process.env.VITE_API_URL || ''";
+      }
+    }
+  ];
+
+  const sourceDirs = ['src', 'client', 'frontend', 'app', 'components', 'pages', 'lib', 'utils', 'api', 'services'];
+  const sourceExtensions = ['.js', '.jsx', '.ts', '.tsx', '.vue', '.svelte'];
+
+  const scanDir = async (dir, depth = 0) => {
+    if (depth > 5) return;
+
+    try {
+      const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+
+        if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' || entry.name === 'build' || entry.name === '.next') {
+          continue;
+        }
+
+        if (entry.isDirectory()) {
+          await scanDir(fullPath, depth + 1);
+        } else if (entry.isFile()) {
+          const ext = path.extname(entry.name).toLowerCase();
+          if (!sourceExtensions.includes(ext)) continue;
+
+          await processFile(fullPath);
+        }
+      }
+    } catch (err) {}
+  };
+
+  const processFile = async (filePath) => {
+    try {
+      let content = await fs.promises.readFile(filePath, 'utf8');
+      let modified = false;
+      const originalContent = content;
+
+      for (const rule of transmutationRules) {
+        if (rule.replace) {
+          const newContent = content.replace(rule.pattern, rule.replace);
+          if (newContent !== content) {
+            content = newContent;
+            modified = true;
+          }
+        }
+      }
+
+      // Add VITE_ prefix to process.env.X calls if missing (for Vite projects)
+      if (isViteProject) {
+        const nonViteEnvs = ['NODE_ENV', 'PORT', 'HOST', 'HOME', 'PATH', 'USER', 'SHELL'];
+        const pattern = /process\.env\.([A-Z_][A-Z0-9_]*)/gi;
+        content = content.replace(pattern, (match, varName) => {
+          if (nonViteEnvs.includes(varName)) return match;
+          if (!varName.startsWith('VITE_')) {
+            results.fixes.push({
+              file: path.relative(workDir, filePath),
+              find: match,
+              replace: `process.env.VITE_${varName}`
+            });
+            return `process.env.VITE_${varName}`;
+          }
+          return match;
+        });
+        if (content !== originalContent) modified = true;
+      }
+
+      if (modified) {
+        await fs.promises.writeFile(filePath, content, 'utf8');
+        results.filesModified++;
+      }
+    } catch (err) {}
+  };
+
+  await scanDir(workDir);
+
+  return results;
 };
 
 const runTransformationPipeline = async (io, sessionId, config) => {
@@ -129,20 +283,23 @@ const runTransformationPipeline = async (io, sessionId, config) => {
     options = {}
   } = config;
 
-  const totalSteps = vercelToken ? 5 : 4;
+  const totalSteps = vercelToken ? 8 : 7;
   let workDir = null;
+  let repoInfo = null;
+
+  // Generate target branch name
+  const targetBranch = `devops-deploy-${projectName.toLowerCase().replace(/[^a-z0-9]/g, '-').substring(0, 8)}`;
 
   try {
     logs.emit('info', `Starting pipeline for: ${projectName}`);
+    logs.emit('info', `Target branch: ${targetBranch}`);
 
     // ===== STEP 1: CLONE OR ACCESS =====
     logs.step(1, totalSteps, 'Fetching project code');
 
-    // Capture the actual branch that was cloned
     let actualBranch = branch || 'main';
 
     if (isGitHubUrl(projectPath)) {
-      // Clone from GitHub URL
       workDir = path.join(os.tmpdir(), `pipeline-${sessionId}`);
       logs.emit('info', `Cloning from GitHub...`);
 
@@ -150,17 +307,30 @@ const runTransformationPipeline = async (io, sessionId, config) => {
       if (!cloneResult.success) {
         throw new Error(`Clone failed: ${cloneResult.error}`);
       }
-      actualBranch = cloneResult.branch; // Use the actual branch that was cloned
+      actualBranch = cloneResult.branch;
 
-      // Remove .git folder to avoid history conflicts when pushing to new repo
-      const gitDir = path.join(workDir, '.git');
-      if (fs.existsSync(gitDir)) {
-        fs.rmSync(gitDir, { recursive: true, force: true });
+      // Parse owner/repo from URL
+      const urlMatch = projectPath.match(/github\.com\/([^\/]+)\/([^\/\.]+)/);
+      if (urlMatch) {
+        repoInfo = {
+          owner: urlMatch[1],
+          repo: urlMatch[2].replace('.git', ''),
+          url: projectPath
+        };
+        logs.emit('info', `Repository: ${repoInfo.owner}/${repoInfo.repo}`);
       }
 
       logs.success(`Repository cloned (${actualBranch} branch) to ${workDir}`);
+
+      // Update project status: Fetch complete, now building
+      await updateProjectStatus(projectName, {
+        status: 'building',
+        mainBranch: actualBranch,
+        githubUrl: projectPath,
+        framework: 'detecting'
+      });
+      emitProjectUpdate(io, projectName, 'building', { step: 1 });
     } else {
-      // Use local path directly
       workDir = projectPath;
       if (!fs.existsSync(workDir)) {
         throw new Error(`Directory not found: ${workDir}`);
@@ -182,24 +352,88 @@ const runTransformationPipeline = async (io, sessionId, config) => {
       signals: analysis.projectType.signals
     });
 
-    // ===== STEP 3: TRANSFORMATION =====
-    logs.step(3, totalSteps, 'Transforming code for Vercel');
-    logs.emit('info', `Generating deployment files...`);
+    // Update project with detected framework
+    await updateProjectStatus(projectName, {
+      framework: analysis.projectType.type.toLowerCase()
+    });
+    emitProjectUpdate(io, projectName, 'building', { step: 2, framework: analysis.projectType.type });
+
+    // ===== STEP 2.5: SECRET SENTINEL (Security Pre-Check) =====
+    logs.step(2.5, totalSteps + 0.5, 'Scanning for secrets');
+    logs.emit('info', `Checking for leaked API keys...`);
+
+    const sentinel = new SecretSentinel({ failOnCritical: true });
+    const securityReport = await sentinel.scanDirectory(workDir);
+
+    if (securityReport.hasCritical) {
+      logs.emit('error', `CRITICAL: ${securityReport.summary.critical} leaked secret(s) detected!`);
+      logs.emit('error', 'Fix these files before deploying:');
+      securityReport.findings
+        .filter(f => f.severity === 'critical')
+        .slice(0, 5)
+        .forEach(finding => {
+          logs.emit('error', `  ${finding.file}:${finding.line} - ${finding.type}`);
+        });
+
+      // Emit security alert to UI
+      io.to(sessionId).emit('security-alert', {
+        type: 'secrets-detected',
+        findings: securityReport.findings.filter(f => f.severity === 'critical'),
+        blocked: true
+      });
+
+      throw new Error('SECRET_SENTINEL_BLOCKED: Critical secrets found in codebase. Move them to environment variables and retry.');
+    }
+
+    if (securityReport.findings.length > 0) {
+      logs.emit('warning', `Found ${securityReport.summary.total} potential secrets (non-blocking)`);
+      securityReport.findings.slice(0, 3).forEach(f => {
+        logs.emit('info', `  ${f.file}:${f.line} - ${f.type}`);
+      });
+    } else {
+      logs.success('No secrets detected - code is clean');
+    }
+
+    // ===== STEP 3: TRANSMUTATION (Source Code Fixes) =====
+    logs.step(3, totalSteps, 'Transmuting source code');
+    logs.emit('info', `Scanning for localhost patterns...`);
+
+    const transmutationResults = await transmuteSourceCode(workDir, logs, {
+      projectType: analysis.projectType.type,
+      envVars
+    });
+
+    logs.success(`Transmuted ${transmutationResults.filesModified} files`);
+    if (transmutationResults.fixes.length > 0) {
+      transmutationResults.fixes.slice(0, 5).forEach(fix => {
+        logs.emit('info', `  -> ${fix.file}: ${fix.find} -> ${fix.replace}`);
+      });
+      if (transmutationResults.fixes.length > 5) {
+        logs.emit('info', `  ... and ${transmutationResults.fixes.length - 5} more fixes`);
+      }
+    }
+
+    // Update project status after transmutation
+    await updateProjectStatus(projectName, {
+      status: 'building'
+    });
+    emitProjectUpdate(io, projectName, 'building', { step: 3 });
+
+    // ===== STEP 4: TRANSFORMATION =====
+    logs.step(4, totalSteps, 'Generating deployment files');
+    logs.emit('info', `Creating vercel.json...`);
 
     const transformResult = await transformForDeployment(workDir, analysis.projectType.type, {
       includeNowJson: options.includeNowJson || false
     });
 
     logs.success(`Created ${transformResult.files.length} deployment files`);
-    transformResult.files.forEach(f => {
-      logs.emit('info', `  + ${path.relative(workDir, f)}`);
-    });
 
     // Log directory structure for debugging
     const listDir = async (dir, prefix = '') => {
       try {
         const entries = await fs.readdir(dir, { withFileTypes: true });
-        for (const entry of entries.slice(0, 20)) { // Limit to 20 entries
+        for (const entry of entries.slice(0, 20)) {
           logs.emit('info', `  ${prefix}${entry.name}${entry.isDirectory() ? '/' : ''}`);
           if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') {
             await listDir(path.join(dir, entry.name), prefix + '  ');
@@ -210,24 +444,9 @@ const runTransformationPipeline = async (io, sessionId, config) => {
     logs.emit('info', `Directory structure:`);
     await listDir(workDir);
 
-    // Log vercel.json content for debugging
     const vercelJsonPath = path.join(workDir, 'vercel.json');
-    if (fs.existsSync(vercelJsonPath)) {
-      const vercelContent = fs.readFileSync(vercelJsonPath, 'utf8');
-      logs.emit('info', `vercel.json content: ${vercelContent}`);
-    }
 
-    // Log detailed transformations
-    if (transformResult.serverTransformed) {
-      if (transformResult.serverTransformed.moved) {
-        logs.emit('info', `  → Moved server to api/index.js`);
-      }
-      if (transformResult.serverTransformed.transformed) {
-        logs.emit('info', `  → Added module.exports = app`);
-      }
-    }
-
-    // ===== STEP 4: GITHUB SYNC =====
+    // ===== STEP 4: GITHUB SYNC (Same Repo, New Branch) =====
     logs.step(4, totalSteps, 'Syncing to GitHub');
     logs.emit('info', `Authenticating with GitHub...`);
 
@@ -237,33 +456,15 @@ const runTransformationPipeline = async (io, sessionId, config) => {
 
     logs.emit('info', `Authenticated as: ${user.name || owner}`);
 
-    // Create new repository
-    let repo;
-    const cleanName = projectName.replace(/[^a-zA-Z0-9-_]/g, '-');
+    // Use original repo name (from the cloned repo URL)
+    const originalRepoName = repoInfo ? repoInfo.repo : projectName.replace(/[^a-zA-Z0-9-_]/g, '-');
+    const repoUrl = repoInfo ? repoInfo.url : projectPath;
 
-    try {
-      repo = await github.createRepository({
-        name: cleanName,
-        description: `Deployed via DevOps Panel - ${analysis.projectType.type}`,
-        isPrivate: options.private !== false,
-        autoInit: false
-      });
-      logs.success(`Repository created: ${repo.html_url}`);
-    } catch (error) {
-      if (error.message && error.message.includes('already exists')) {
-        repo = await github.getRepository(owner, cleanName);
-        logs.warning('Repository already exists');
-      } else {
-        throw error;
-      }
-    }
-
-    // Helper for Node.js-based delays (Windows-compatible)
     const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-    // Push code to new repo using simple-git (cross-platform)
-    logs.emit('info', `Pushing to GitHub...`);
-    const remoteUrl = repo.clone_url.replace('https://', `https://x-access-token:${githubToken}@`);
+    // Push code to NEW BRANCH in SAME REPO
+    logs.emit('info', `Pushing to ${targetBranch} branch in original repo...`);
+    const remoteUrl = repoUrl.replace('.git', '').replace('https://', `https://x-access-token:${githubToken}@`);
 
     try {
       const git = simpleGit(workDir);
@@ -274,8 +475,6 @@ const runTransformationPipeline = async (io, sessionId, config) => {
       logs.emit('info', `Git config...`);
       await git.addConfig('user.email', 'panel@devops.local', false, 'local');
       await git.addConfig('user.name', 'DevOps Panel', false, 'local');
-
-      // Bulletproof Git settings for GitHub transfer
       await git.addConfig('http.postBuffer', '524288000', false, 'local');
       await git.addConfig('core.compression', '0', false, 'local');
 
@@ -286,42 +485,42 @@ const runTransformationPipeline = async (io, sessionId, config) => {
         fs.writeFileSync(gitignorePath, gitignoreContent + '\nnode_modules/\n');
       }
 
-      // Force sync file system to ensure all files are written to disk
       fs.sync && fs.sync();
 
       logs.emit('info', `Git add...`);
       await git.add('.');
 
-      // Explicitly add vercel.json to ensure it's staged
-      const vercelJsonPath = path.join(workDir, 'vercel.json');
       if (fs.existsSync(vercelJsonPath)) {
         await git.add('vercel.json');
         logs.emit('info', `Staged vercel.json`);
       }
 
       logs.emit('info', `Git commit...`);
-      await git.commit('Deploy via DevOps Panel');
+      await git.commit('Deploy via DevOps Panel - Transmuted for Vercel');
 
-      logs.emit('info', `Git push (may take a moment)...`);
+      logs.emit('info', `Creating ${targetBranch} branch...`);
 
-      // Push with retries
+      await git.branch(['-m', 'HEAD', targetBranch]).catch(() => {
+        return git.checkoutLocalBranch(targetBranch);
+      });
+
+      logs.emit('info', `Git push to ${targetBranch}...`);
+
+      try {
+        const remotes = await git.getRemotes();
+        if (remotes.some(r => r.name === 'origin')) {
+          await git.removeRemote('origin');
+        }
+      } catch {}
+      await git.addRemote('origin', remoteUrl);
+
       let pushSuccess = false;
       let pushError = null;
 
       for (let attempt = 1; attempt <= 3 && !pushSuccess; attempt++) {
         try {
           if (attempt === 1) await delay(500);
-
-          // Set remote (remove existing if present, then add new)
-          try {
-            const remotes = await git.getRemotes();
-            if (remotes.some(r => r.name === 'origin')) {
-              await git.removeRemote('origin');
-            }
-          } catch {}
-          await git.addRemote('origin', remoteUrl);
-
-          await git.push(['-u', 'origin', actualBranch, '--force']);
+          await git.push(['-u', 'origin', targetBranch, '--force']);
           pushSuccess = true;
         } catch (pushErr) {
           pushError = pushErr;
@@ -332,153 +531,154 @@ const runTransformationPipeline = async (io, sessionId, config) => {
         }
       }
 
-      // If push still fails, try alternative approach
       if (!pushSuccess) {
-        console.log(`[Pipeline:${sessionId}] Standard push failed, trying alternative...`);
-        try {
-          // Remove .git and re-init with fs (Windows-safe)
-          const gitDir = path.join(workDir, '.git');
-          if (fs.existsSync(gitDir)) {
-            fs.rmSync(gitDir, { recursive: true, force: true });
-          }
-
-          const altGit = simpleGit(workDir);
-          await altGit.init();
-          await altGit.addConfig('user.email', 'panel@devops.local', false, 'local');
-          await altGit.addConfig('user.name', 'DevOps Panel', false, 'local');
-          await altGit.add('.');
-          await altGit.commit('Deploy via DevOps Panel');
-
-          // Add remote with name origin2 (since origin won't exist after fresh init)
-          await altGit.addRemote('origin2', remoteUrl);
-          await altGit.push(['-u', 'origin2', actualBranch]);
-          pushSuccess = true;
-        } catch (altErr) {
-          console.error(`[Pipeline:${sessionId}] Alternative push also failed: ${altErr.message}`);
-          throw new Error(`Git push failed: ${pushError?.message || altErr.message}`);
-        }
+        throw new Error(`Git push failed: ${pushError?.message}`);
       }
 
-      console.log(`[Pipeline:${sessionId}] Git push done`);
+      logs.success(`Code pushed to ${targetBranch} branch`);
+      logs.emit('info', `Original repo: ${repoUrl}`);
+
+      // Update project with branch info
+      await updateProjectStatus(projectName, {
+        targetBranch: targetBranch
+      });
+      emitProjectUpdate(io, projectName, 'building', { step: 5 });
+
+      // Webhook installation updates
     } catch (gitError) {
       console.error(`[Pipeline:${sessionId}] Git error:`, gitError.message);
       throw new Error(`Git push failed: ${gitError.message}`);
     }
 
-    logs.success(`Code pushed to ${actualBranch} branch`);
+    // ===== STEP 6: WEBHOOK INJECTION =====
+    if (repoInfo) {
+      logs.step(6, totalSteps, 'Installing webhook');
+      logs.emit('info', `Setting up auto-sync webhook...`);
+
+      try {
+        const webhookUrl = options.webhookUrl || `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/webhooks/github`;
+
+        const existingHooks = await github.listWebhooks(repoInfo.owner, repoInfo.repo);
+        const existingHook = existingHooks.find(h => h.config?.url === webhookUrl);
+
+        if (existingHook) {
+          logs.emit('info', `Webhooks already configured`);
+        } else {
+          const webhook = await github.createWebhook(repoInfo.owner, repoInfo.repo, webhookUrl, ['push']);
+          logs.success(`Webhook installed: ${webhook.id}`);
+          logs.emit('info', `Webhook secret saved for verification`);
+        }
+
+        repoInfo.webhookConfigured = true;
+      } catch (webhookError) {
+        logs.emit('warning', `Webhook setup failed: ${webhookError.message}`);
+        logs.emit('warning', `Manual webhook may be required for auto-sync`);
+      }
+    }
+
     console.log(`[Pipeline:${sessionId}] Git sync complete, checking Vercel step`);
 
-    // ===== STEP 5: VERCEL DEPLOY =====
+    // ===== STEP 8: VERCEL DEPLOY (Same Repo) =====
     if (vercelToken) {
+      logs.step(8, totalSteps, 'Deploying to Vercel');
       logs.emit('info', `Setting up Vercel project...`);
-      console.log(`[Pipeline:${sessionId}] Vercel step starting`);
-      logs.step(5, totalSteps, 'Deploying to Vercel');
-      logs.emit('info', `Setting up Vercel project...`);
+
+      // Update project to building status for Vercel deployment
+      await updateProjectStatus(projectName, {
+        status: 'building'
+      });
+      emitProjectUpdate(io, projectName, 'building', { step: 7 });
 
       const vercel = createVercelService(vercelToken);
 
       try {
         logs.emit('info', `Checking for existing Vercel project...`);
-        console.log(`[Pipeline:${sessionId}] Calling vercel.getProject(${cleanName})`);
 
-        // Verify/create project
         let project;
         try {
-          project = await vercel.getProject(cleanName);
-          console.log(`[Pipeline:${sessionId}] getProject returned:`, project ? 'project found' : 'null');
+          project = await vercel.getProject(originalRepoName);
         } catch (err) {
-          console.log(`[Pipeline:${sessionId}] getProject error:`, err.message);
           logs.emit('warning', `getProject error: ${err.message}`);
           project = null;
         }
 
-        console.log(`[Pipeline:${sessionId}] Vercel getProject result:`, project);
-
         if (!project) {
-          logs.emit('info', `Creating Vercel project: ${cleanName}`);
-
-          // Don't specify framework for generic Node.js APIs
-          // Vercel will auto-detect based on vercel.json
-          console.log(`[Pipeline:${sessionId}] Creating without explicit framework`);
-          console.log(`[Pipeline:${sessionId}] Calling vercel.createProject()`);
+          logs.emit('info', `Creating Vercel project: ${originalRepoName}`);
 
           try {
             const createData = {
-              name: cleanName,
+              name: originalRepoName,
               gitRepository: {
                 type: 'github',
-                repo: `${owner}/${cleanName}`
+                repo: `${repoInfo?.owner || owner}/${originalRepoName}`
               }
             };
-            console.log(`[Pipeline:${sessionId}] createProject payload:`, JSON.stringify(createData));
 
             project = await vercel.createProject(createData);
-            console.log(`[Pipeline:${sessionId}] createProject returned:`, JSON.stringify(project).substring(0, 200));
             logs.success(`Project created: vercel.com/dashboard`);
 
-            // Link to GitHub after project creation
             try {
               logs.emit('info', `Linking project to GitHub...`);
-              const repoFullName = `${owner}/${cleanName}`;
-              console.log(`[Pipeline:${sessionId}] Linking to GitHub repo: ${repoFullName}`);
-
-              // Use the import Git provider API to link the project
               await vercel.request('POST', `/v1/projects/${project.id}/import`, {
                 gitSource: {
                   type: 'github',
-                  repo: repoFullName,
-                  ref: actualBranch
+                  repo: `${repoInfo?.owner || owner}/${originalRepoName}`,
+                  ref: targetBranch
                 }
               });
               logs.emit('info', `Linked to GitHub`);
             } catch (linkErr) {
-              console.log(`[Pipeline:${sessionId}] GitHub link warning:`, linkErr.message);
               logs.emit('warning', `GitHub link may require manual setup`);
             }
           } catch (createErr) {
-            console.error(`[Pipeline:${sessionId}] createProject error:`, createErr.message);
-            console.error(`[Pipeline:${sessionId}] createProject error details:`, createErr.details);
             logs.error(`Failed to create Vercel project: ${createErr.message}`);
-            // Continue without Vercel - GitHub sync already succeeded
           }
         } else {
           logs.emit('info', `Using existing project: ${project.name}`);
         }
 
-        // Only continue if project was created/exists
         if (!project) {
           logs.warning('Skipping Vercel deployment - no project available');
         } else {
-          // Get GitHub repo ID for Vercel deployment
           let repoId = null;
           try {
             logs.emit('info', `Getting GitHub repo ID...`);
-            repoId = await github.getRepoId(owner, cleanName);
-            console.log(`[Pipeline:${sessionId}] GitHub repoId: ${repoId}`);
+            repoId = await github.getRepoId(repoInfo?.owner || owner, originalRepoName);
           } catch (err) {
             console.log(`[Pipeline:${sessionId}] Could not get repoId:`, err.message);
           }
 
-          // Wait for project to be fully ready (increased to 5s for env vars)
           await new Promise(r => setTimeout(r, 5000));
 
-          // Inject environment variables with sync & verify approach
+          // Inject environment variables
           if (envVars.length > 0) {
             logs.emit('info', `Syncing ${envVars.length} environment variable(s)...`);
-            logs.emit('info', 'Syncing Environment Variables...');
 
-            // Auto-add VITE_ prefix for Vite projects if missing
             const projectType = analysis.projectType.type;
             const isViteProject = projectType === PROJECT_TYPES.FRONTEND_FRAMEWORK;
 
             const envsObject = {};
             for (const envVar of envVars) {
               let key = envVar.key;
-              if (isViteProject && !key.startsWith('VITE_') && !key.startsWith('NODE_')) {
+              let value = envVar.value;
+
+              if (key === 'VITE_API_URL' && value.includes('localhost')) {
+                value = '';
+                logs.emit('info', `  Auto-cleared VITE_API_URL (using Vercel rewrites)`);
+              } else if (key.startsWith('VITE_') && !isViteProject) {
+                key = key.replace('VITE_', '');
+                logs.emit('info', `  Stripped VITE_ prefix: ${envVar.key} -> ${key}`);
+              } else if (isViteProject && !key.startsWith('VITE_') && !key.startsWith('NODE_') && !key.startsWith('REACT_')) {
                 key = `VITE_${key}`;
-                logs.emit('info', `  Auto-prefixed ${envVar.key} → ${key}`);
+                logs.emit('info', `  Auto-prefixed ${envVar.key} -> ${key}`);
               }
-              envsObject[key] = envVar.value;
+
+              envsObject[key] = value;
+            }
+
+            if (isViteProject && !envsObject.VITE_API_URL) {
+              envsObject.VITE_API_URL = '';
+              logs.emit('info', `  Added VITE_API_URL="" (for Vercel proxy)`);
             }
 
             await vercel.syncVercelEnvironment(project.id, vercelToken, envsObject);
@@ -493,57 +693,167 @@ const runTransformationPipeline = async (io, sessionId, config) => {
             }
           }
 
-          // Trigger deployment
+          // Trigger deployment with streaming logs
           logs.emit('info', `Triggering deployment...`);
 
           try {
             const deploymentData = {
-              name: cleanName,
+              name: originalRepoName,
               gitSource: {
                 type: 'github'
               }
             };
 
-            // Add repoId if available
             if (repoId) {
               deploymentData.gitSource.repoId = repoId;
-              deploymentData.gitSource.ref = actualBranch;
+              deploymentData.gitSource.ref = targetBranch;
             } else {
-              // Fallback without repoId
-              deploymentData.gitSource.repo = `${owner}/${cleanName}`;
-              deploymentData.gitSource.ref = actualBranch;
+              deploymentData.gitSource.repo = `${repoInfo?.owner || owner}/${originalRepoName}`;
+              deploymentData.gitSource.ref = targetBranch;
             }
 
             const deployment = await vercel.createDeployment(deploymentData);
 
             logs.emit('info', `Deployment queued: ${deployment.id}`);
+            logs.emit('info', `Watch build progress: https://vercel.com/deployments/${deployment.id}`);
 
-            // Poll for completion
-            for (let i = 0; i < 30; i++) {
-              await new Promise(r => setTimeout(r, 5000));
+            // Stream build logs in real-time
+            let buildLogs = [];
 
-              const status = await vercel.getDeployment(deployment.id);
-              const { readyState } = status;
+            const buildLogResult = await vercel.streamDeploymentLogs(
+              deployment.id,
+              (logEntry, rawEvent) => {
+                let message = '';
+                let level = 'info';
 
-              logs.emit('info', `Status: ${readyState}`);
+                if (logEntry.type === 'command-output' || rawEvent.payload?.type === 'command-output') {
+                  message = rawEvent.payload?.text || logEntry.message;
+                  if (message.includes('npm ERR') || message.includes('error')) {
+                    level = 'error';
+                  } else if (message.includes('warn')) {
+                    level = 'warning';
+                  }
+                } else if (logEntry.type === 'error') {
+                  message = `Build Error: ${logEntry.message}`;
+                  level = 'error';
+                } else if (rawEvent.payload?.text) {
+                  message = rawEvent.payload.text;
+                } else {
+                  message = logEntry.message;
+                }
 
-              if (readyState === 'READY') {
-                logs.success(`Live at: https://${status.url}`);
+                // Capture logs for AI analysis
+                buildLogs.push({
+                  timestamp: new Date(),
+                  level,
+                  message,
+                  type: logEntry.type
+                });
+
+                if (message && message.trim()) {
+                  logs.emit(level, message);
+                }
+              },
+              { interval: 2000, maxAttempts: 90 }
+            );
+
+            // Check build result
+            if (buildLogResult.complete) {
+              if (buildLogResult.status === 'READY') {
+                logs.success(`Live at: https://${buildLogResult.url}`);
                 logs.success('===== Pipeline Complete =====');
+
+                // Update project to live status
+                await updateProjectStatus(projectName, {
+                  status: 'live',
+                  vercelUrl: `https://${buildLogResult.url}`,
+                  lastDeployAt: new Date(),
+                  lastWebhookAt: new Date()
+                });
+                emitProjectUpdate(io, projectName, 'live', {
+                  url: `https://${buildLogResult.url}`
+                });
+
+                // Send success notification
+                try {
+                  const duration = buildLogResult.duration || 0;
+                  await fetch(`${process.env.BACKEND_URL || 'http://localhost:5000'}/api/notify/send`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      projectName,
+                      status: 'live',
+                      duration,
+                      url: `https://${buildLogResult.url}`
+                    })
+                  });
+                } catch (notifyErr) {
+                  console.log(`[Pipeline:${sessionId}] Notification failed: ${notifyErr.message}`);
+                }
+
                 return {
                   success: true,
-                  repository: repo.html_url,
-                  project: cleanName,
-                  deployment: status.url
+                  repository: repoUrl,
+                  branch: targetBranch,
+                  project: originalRepoName,
+                  deployment: `https://${buildLogResult.url}`
                 };
-              }
+              } else if (buildLogResult.status === 'ERROR') {
+                logs.error('Vercel build failed');
 
-              if (readyState === 'ERROR') {
+                // Run AI diagnostic on failure
+                const aiService = createAIService();
+                const diagnosis = await aiService.diagnoseBuildFailure(buildLogs);
+
+                let diagnosisText = null;
+                if (diagnosis.success) {
+                  diagnosisText = diagnosis.diagnosis;
+                  logs.emit('info', `AI Diagnosis: ${diagnosis.diagnosis}`);
+
+                  // Emit AI insight event for UI
+                  io.to(sessionId).emit('ai-insight', {
+                    type: 'diagnosis',
+                    diagnosis: diagnosis.diagnosis,
+                    issue: diagnosis.issue,
+                    suggestion: diagnosis.suggestion,
+                    confidence: diagnosis.confidence,
+                    timestamp: new Date()
+                  });
+
+                  // Send notification with diagnosis
+                  try {
+                    const duration = buildLogResult.duration || 0;
+                    await fetch(`${process.env.BACKEND_URL || 'http://localhost:5000'}/api/notify/send`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        projectName,
+                        status: 'failed',
+                        duration,
+                        diagnosis: diagnosis.diagnosis
+                      })
+                    });
+                  } catch (notifyErr) {
+                    console.log(`[Pipeline:${sessionId}] Notification failed: ${notifyErr.message}`);
+                  }
+                } else {
+                  logs.emit('warning', `AI diagnostic unavailable: ${diagnosis.error}`);
+                }
+
+                // Store diagnosis in project
+                await updateProjectStatus(projectName, {
+                  status: 'failed',
+                  aiDiagnosis: diagnosisText
+                });
+                emitProjectUpdate(io, projectName, 'failed', { aiDiagnosis: diagnosisText });
+
                 throw new Error('Vercel deployment failed');
+              } else {
+                logs.warning(`Deployment status: ${buildLogResult.status}`);
               }
+            } else {
+              logs.warning('Build log streaming timed out');
             }
-
-            logs.warning('Deployment polling timed out, check Vercel dashboard');
           } catch (vercelError) {
             logs.error(`Vercel error: ${vercelError.message}`);
           }
@@ -561,20 +871,34 @@ const runTransformationPipeline = async (io, sessionId, config) => {
     }
 
     logs.success('===== Pipeline Complete =====', {
-      repository: repo.html_url,
-      project: cleanName
+      repository: repoUrl,
+      branch: targetBranch,
+      project: originalRepoName
     });
+
+    // Update project to live status (for non-Vercel deployments too)
+    await updateProjectStatus(projectName, {
+      status: 'live',
+      lastDeployAt: new Date()
+    });
+    emitProjectUpdate(io, projectName, 'live');
 
     return {
       success: true,
-      repository: repo.html_url,
-      project: cleanName
+      repository: repoUrl,
+      branch: targetBranch,
+      project: originalRepoName
     };
 
   } catch (error) {
     logs.error(`Pipeline failed: ${error.message}`);
 
-    // Cleanup on error
+    // Update project to failed status
+    await updateProjectStatus(projectName, {
+      status: 'failed'
+    });
+    emitProjectUpdate(io, projectName, 'failed');
+
     if (workDir && workDir.startsWith(os.tmpdir())) {
       try {
         fs.rmSync(workDir, { recursive: true, force: true });

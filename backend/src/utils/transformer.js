@@ -32,8 +32,10 @@ const generateVercelConfig = (projectType, config = {}) => {
       config: { distDir: 'dist' }
     });
 
+    // Add API proxy rewrite for frontend to call backend
     baseConfig.rewrites = [
-      { source: '/(.*)', destination: '/index.html' }
+      { "source": "/api/(.*)", "destination": "/api/index.js" },
+      { "source": "/(.*)", "destination": "/index.html" }
     ];
     return baseConfig;
   }
@@ -405,7 +407,7 @@ exports.transformForDeployment = async (workDir, projectType, options = {}) => {
         use: '@vercel/node'
       }],
       rewrites: [
-        { source: '/(.*)', destination: '/api/index.js' }
+        { "source": "/(.*)", "destination": "/api/index.js" }
       ],
       headers: [
         {
@@ -427,7 +429,8 @@ exports.transformForDeployment = async (workDir, projectType, options = {}) => {
       buildCommand: 'cd frontend && npm install && npm run build',
       outputDirectory: 'frontend/dist',
       rewrites: [
-        { source: '/api/:path*', destination: '/api/index.js' }
+        { "source": "/api/(.*)", "destination": "/api/index.js" },
+        { "source": "/(.*)", "destination": "/index.html" }
       ]
     };
     console.log(`[Transform] Created fresh vercelConfig for MERN:`, JSON.stringify(vercelConfig, null, 2));

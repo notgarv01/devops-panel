@@ -2,62 +2,348 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================
+   MINIMAL PREMIUM - CINEMATIC DARK THEME
+   ============================================ */
+
+/* Base Reset */
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background-color: #050505;
-  color: #e5e7eb;
+  background-color: #000000;
+  background-image:
+    radial-gradient(ellipse at 50% 0%, rgba(0, 212, 255, 0.03) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 50%, rgba(123, 97, 255, 0.02) 0%, transparent 40%),
+    radial-gradient(ellipse at 20% 80%, rgba(123, 97, 255, 0.02) 0%, transparent 40%);
+  color: #ffffff;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ============================================
+   SCROLLBAR - MINIMAL PRECISION
+   ============================================ */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0F0F0F;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2a2a2a;
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a3a3a;
+  background: rgba(255, 255, 255, 0.15);
 }
 
-/* Glassmorphism utility */
+/* ============================================
+   GLASSMORPHISM - PREMIUM COMMAND CENTER
+   ============================================ */
 .glass {
-  background: rgba(26, 26, 26, 0.8);
-  backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(15, 15, 15, 0.7);
+  backdrop-filter: blur(40px);
+  -webkit-backdrop-filter: blur(40px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-/* Glow effects */
-.glow-blue {
-  box-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+.glass-card {
+  background: rgba(20, 20, 20, 0.6);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
+/* ============================================
+   CINEMATIC GLOWS
+   ============================================ */
+
+/* Cyan Glow - Fast Deploy */
+.glow-cyan {
+  box-shadow:
+    0 0 20px rgba(0, 212, 255, 0.15),
+    0 0 40px rgba(0, 212, 255, 0.08),
+    inset 0 0 20px rgba(0, 212, 255, 0.02);
+  border-color: rgba(0, 212, 255, 0.3) !important;
+}
+
+/* Purple Glow - Slow Deploy */
 .glow-purple {
-  box-shadow: 0 0 20px rgba(123, 97, 255, 0.3);
+  box-shadow:
+    0 0 20px rgba(123, 97, 255, 0.15),
+    0 0 40px rgba(123, 97, 255, 0.08),
+    inset 0 0 20px rgba(123, 97, 255, 0.02);
+  border-color: rgba(123, 97, 255, 0.3) !important;
 }
 
-/* Neon text */
+/* Success Glow */
+.glow-emerald {
+  box-shadow:
+    0 0 20px rgba(16, 185, 129, 0.15),
+    0 0 40px rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.3) !important;
+}
+
+/* Base Glow */
+.glow {
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.2);
+}
+
+/* ============================================
+   NEON TEXT - HIGH CONTRAST
+   ============================================ */
 .text-neon-blue {
   color: #00D4FF;
-  text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+  text-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
 }
 
 .text-neon-purple {
   color: #7B61FF;
-  text-shadow: 0 0 10px rgba(123, 97, 255, 0.5);
+  text-shadow: 0 0 20px rgba(123, 97, 255, 0.4);
+}
+
+.text-neon-emerald {
+  color: #10B981;
+  text-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
+}
+
+/* ============================================
+   CINEMATIC TRANSITIONS & ANIMATIONS
+   ============================================ */
+
+/* Slide Up - For token reveal */
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.3s ease-out forwards;
+}
+
+/* Paper Unfold - For Vercel section */
+@keyframes unfold {
+  from {
+    opacity: 0;
+    max-height: 0;
+    transform: translateY(-8px) scaleY(0.8);
+  }
+  to {
+    opacity: 1;
+    max-height: 500px;
+    transform: translateY(0) scaleY(1);
+  }
+}
+
+.animate-unfold {
+  animation: unfold 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  overflow: hidden;
+}
+
+/* Pop In - For adding rows */
+@keyframes popIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  70% {
+    transform: scale(1.02);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-pop-in {
+  animation: popIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* ============================================
+   PULSING INDICATORS
+   ============================================ */
+
+/* Pulsing Green Dot */
+@keyframes pulse-dot {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(0.85);
+  }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+/* Checkmark Pop */
+@keyframes checkPop {
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-check-pop {
+  animation: checkPop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* ============================================
+   MODE SELECTOR CARDS
+   ============================================ */
+.mode-card {
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.mode-card:hover {
+  transform: translateY(-2px);
+}
+
+.mode-card.selected-cyan {
+  background: rgba(0, 212, 255, 0.08);
+  border-color: rgba(0, 212, 255, 0.4);
+  box-shadow:
+    0 0 30px rgba(0, 212, 255, 0.12),
+    inset 0 0 30px rgba(0, 212, 255, 0.03);
+}
+
+.mode-card.selected-purple {
+  background: rgba(123, 97, 255, 0.08);
+  border-color: rgba(123, 97, 255, 0.4);
+  box-shadow:
+    0 0 30px rgba(123, 97, 255, 0.12),
+    inset 0 0 30px rgba(123, 97, 255, 0.03);
+}
+
+/* ============================================
+   INPUT STYLES - BORDERLESS PREMIUM
+   ============================================ */
+.input-premium {
+  background: transparent;
+  border: none;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.input-premium::placeholder {
+  color: rgba(255, 255, 255, 0.25);
+}
+
+/* ============================================
+   ENVIRONMENT VARIABLE SUGGESTIONS
+   ============================================ */
+.env-suggestion {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: rgba(0, 212, 255, 0.5);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.env-row:focus-within .env-suggestion {
+  opacity: 1;
+}
+
+/* ============================================
+   ANIMATED ICONS
+   ============================================ */
+
+/* Lightning Bolt Pulse */
+@keyframes lightning-pulse {
+  0%, 100% {
+    filter: drop-shadow(0 0 4px rgba(0, 212, 255, 0.6));
+  }
+  50% {
+    filter: drop-shadow(0 0 12px rgba(0, 212, 255, 0.9));
+  }
+}
+
+.animate-lightning {
+  animation: lightning-pulse 2s ease-in-out infinite;
+}
+
+/* Sync Rotate */
+@keyframes sync-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-sync {
+  animation: sync-rotate 3s linear infinite;
+}
+
+/* ============================================
+   FLEET MANAGER ANIMATIONS
+   ============================================ */
+
+/* Fade In for Grid Items */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.4s ease-out forwards;
+  opacity: 0;
+}
+
+/* Subtle Pulse for Building Status */
+@keyframes pulse-subtle {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s ease-in-out infinite;
 }

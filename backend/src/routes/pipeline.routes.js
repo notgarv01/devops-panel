@@ -1,6 +1,94 @@
 const express = require('express');
 const router = express.Router();
 const { runTransformationPipeline } = require('../services/orchestrator');
+const { getQueueManager, initQueueManager } = require('../services/queueManager');
+const AuditLog = require('../models/AuditLog');
+
+// Initialize queue manager
+const queueManager = initQueueManager(process.env.REDIS_URL || null);
+
+// Process queue worker
+const processDeployment = async (jobData, job) => {
+  const { id, projectPath, githubToken, vercelToken, projectName, branch, envVars, options, userId } = jobData;
+
+  console.log(`[Pipeline:${id}] Worker picked up job`);
+
+  // Get io from global (set in index.js)
+  const io = global.io;
+
+  // Safety: 5 minute timeout for entire pipeline
+  const pipelineTimeout = setTimeout(() => {
+    console.error(`[Pipeline:${id}] Pipeline timed out after 5 minutes`);
+    if (io) {
+      io.to(id).emit('pipeline-log', {
+        sessionId: id,
+        timestamp: new Date(),
+        level: 'error',
+        message: 'Pipeline timed out after 5 minutes'
+      });
+    }
+  }, 5 * 60 * 1000);
+
+  try {
+    const result = await runTransformationPipeline(io, id, {
+      projectPath,
+      githubToken,
+      vercelToken,
+      projectName,
+      branch,
+      envVars,
+      options
+    });
+
+    clearTimeout(pipelineTimeout);
+    console.log(`[Pipeline:${id}] Complete:`, result);
+
+    // Log completion
+    await AuditLog.log({
+      action: 'deployment.completed',
+      resource: 'pipeline',
+      resourceId: id,
+      actor: { id: userId, type: 'user' },
+      metadata: result,
+      project: { name: projectName },
+      severity: 'info'
+    });
+
+    return result;
+  } catch (error) {
+    clearTimeout(pipelineTimeout);
+    console.error(`[Pipeline:${id}] Failed:`, error.message);
+
+    // Log failure
+    await AuditLog.log({
+      action: 'deployment.failed',
+      resource: 'pipeline',
+      resourceId: id,
+      actor: { id: userId, type: 'user' },
+      metadata: { error: error.message },
+      project: { name: projectName },
+      severity: 'warning'
+    });
+
+    if (io) {
+      io.to(id).emit('pipeline-log', {
+        sessionId: id,
+        timestamp: new Date(),
+        level: 'error',
+        message: `Pipeline error: ${error.message}`
+      });
+      io.to(id).emit('pipeline-error', {
+        sessionId: id,
+        error: error.message
+      });
+    }
+
+    throw error;
+  }
+};
+
+// Start processing queue
+queueManager.processQueue('deployments', processDeployment, 2);
 
 router.post('/run', async (req, res) => {
   const io = req.app.get('io');
@@ -13,7 +101,9 @@ router.post('/run', async (req, res) => {
     branch = 'main',
     envVars = [],
     options = {},
-    sessionId // Optional: use client-provided sessionId
+    sessionId,
+    userId,
+    workspaceId
   } = req.body;
 
   // Validation
@@ -34,59 +124,63 @@ router.post('/run', async (req, res) => {
   // Use provided sessionId or generate new one
   const id = sessionId || `pipeline-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
+  // Get queue status for position
+  const queueStatus = queueManager.getQueueStatus('deployments');
+  const queuePosition = queueStatus.waiting + queueStatus.active + 1;
+
   // Return immediately with session ID
   res.status(202).json({
     success: true,
-    message: 'Pipeline started',
+    message: 'Pipeline queued',
     sessionId: id,
-    stages: ['fetch', 'analyze', 'transform', 'github-sync', vercelToken ? 'vercel-deploy' : 'complete']
+    queuePosition,
+    queueTotal: queuePosition,
+    stages: ['fetch', 'analyze', 'scan', 'transform', 'github-sync', vercelToken ? 'vercel-deploy' : 'complete']
   });
 
-  console.log(`[Pipeline:${id}] Starting with config:`, { projectPath, projectName });
+  console.log(`[Pipeline:${id}] Queued at position #${queuePosition}`);
 
-  // Safety: 5 minute timeout for entire pipeline
-  const pipelineTimeout = setTimeout(() => {
-    console.error(`[Pipeline:${id}] Pipeline timed out after 5 minutes`);
-    if (io) {
-      io.to(id).emit('pipeline-log', {
-        sessionId: id,
-        timestamp: new Date(),
-        level: 'error',
-        message: 'Pipeline timed out after 5 minutes'
-      });
-    }
-  }, 5 * 60 * 1000);
+  // Log the enqueue event
+  try {
+    await AuditLog.log({
+      action: 'deployment.started',
+      resource: 'pipeline',
+      resourceId: id,
+      actor: { id: userId, type: 'user' },
+      metadata: {
+        projectPath,
+        projectName,
+        branch,
+        queuePosition
+      },
+      project: { name: projectName },
+      severity: 'info'
+    });
+  } catch (e) {
+    console.log('[Audit] Failed to log:', e.message);
+  }
 
-  // Run pipeline
-  runTransformationPipeline(io, id, {
+  // Enqueue the job (don't pass io - use global.io in worker)
+  const job = await queueManager.addJob('deployments', 'run-pipeline', {
+    id,
     projectPath,
     githubToken,
     vercelToken,
     projectName,
     branch,
     envVars,
-    options
-  })
-  .then(result => {
-    clearTimeout(pipelineTimeout);
-    console.log(`[Pipeline:${id}] Complete:`, result);
-  })
-  .catch(error => {
-    clearTimeout(pipelineTimeout);
-    console.error(`[Pipeline:${id}] Failed:`, error.message);
-    if (io) {
-      io.to(id).emit('pipeline-log', {
-        sessionId: id,
-        timestamp: new Date(),
-        level: 'error',
-        message: `Pipeline error: ${error.message}`
-      });
-      io.to(id).emit('pipeline-error', {
-        sessionId: id,
-        error: error.message
-      });
-    }
+    options,
+    userId
   });
+
+  // Notify queue position
+  if (io) {
+    io.to(id).emit('queue-position', {
+      sessionId: id,
+      position: queuePosition,
+      total: queuePosition
+    });
+  }
 });
 
 // Health check / status

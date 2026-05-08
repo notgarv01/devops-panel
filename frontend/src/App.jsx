@@ -1,170 +1,179 @@
 import { useState, useEffect } from 'react';
-import Header from './components/Header';
+import { Zap, LayoutGrid, Plus } from 'lucide-react';
 import CommandCenter from './components/CommandCenter';
-import DeploymentPanel from './components/DeploymentPanel';
-import NewProjectForm from './components/NewProjectForm';
-import DeploymentList from './components/DeploymentList';
-import LogsTerminal from './components/LogsTerminal';
-import { deployService } from './services/api';
-import socket from './services/socket';
+import ProjectsGrid from './components/ProjectsGrid';
+import { initializeSocketListeners } from './stores/deployStore';
 
 function App() {
-  const [activeTab, setActiveTab] = useState('command');
-  const [deployments, setDeployments] = useState([]);
-  const [selectedDeployment, setSelectedDeployment] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState('fleet'); // 'fleet' or 'deploy'
+  const [vercelToken, setVercelToken] = useState('');
 
   useEffect(() => {
-    loadDeployments();
+    initializeSocketListeners();
   }, []);
 
-  useEffect(() => {
-    socket.on('deployment-log', (log) => {
-      setDeployments(prev => prev.map(d => {
-        if (d._id === log.deploymentId) {
-          return {
-            ...d,
-            logs: [...(d.logs || []), { timestamp: log.timestamp, level: log.level, message: log.message }]
-          };
-        }
-        return d;
-      }));
-
-      if (selectedDeployment && selectedDeployment._id === log.deploymentId) {
-        setSelectedDeployment(prev => ({
-          ...prev,
-          logs: [...(prev.logs || []), { timestamp: log.timestamp, level: log.level, message: log.message }]
-        }));
-      }
-    });
-
-    socket.on('deployment-status', (data) => {
-      setDeployments(prev => prev.map(d => {
-        if (d._id === data.deploymentId) {
-          return { ...d, status: data.status };
-        }
-        return d;
-      }));
-
-      if (selectedDeployment && selectedDeployment._id === data.deploymentId) {
-        setSelectedDeployment(prev => ({ ...prev, status: data.status }));
-      }
-    });
-
-    return () => {
-      socket.off('deployment-log');
-      socket.off('deployment-status');
-    };
-  }, [selectedDeployment]);
-
-  const loadDeployments = async () => {
-    try {
-      const data = await deployService.getDeployments();
-      setDeployments(data);
-    } catch (error) {
-      console.error('Failed to load deployments:', error);
-    } finally {
-      setLoading(false);
-    }
+  const handleDeployNew = () => {
+    setView('deploy');
   };
 
-  const handleDeploy = async (formData) => {
-    try {
-      const result = await deployService.createDeployment(formData);
-      await loadDeployments();
-      return result;
-    } catch (error) {
-      throw error;
-    }
-  };
-
-  const handleStop = async (id) => {
-    try {
-      await deployService.stopDeployment(id);
-      await loadDeployments();
-    } catch (error) {
-      console.error('Failed to stop deployment:', error);
-    }
-  };
-
-  const handleDelete = async (id) => {
-    try {
-      await deployService.deleteDeployment(id);
-      if (selectedDeployment?._id === id) {
-        setSelectedDeployment(null);
-      }
-      await loadDeployments();
-    } catch (error) {
-      console.error('Failed to delete deployment:', error);
-    }
+  const handleBackToFleet = () => {
+    setView('fleet');
   };
 
   return (
-    <div className="min-h-screen bg-[#050505]">
-      <Header />
+    <div className="min-h-screen bg-black">
+      {view === 'fleet' ? (
+        <>
+          {/* Fleet Manager Header */}
+          <header className="sticky top-0 z-40 bg-black/90 backdrop-blur-xl border-b border-zinc-800/50">
+            <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-6">
+                {/* Logo */}
+                <div className="flex items-center gap-3 cursor-pointer" onClick={handleBackToFleet}>
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 via-purple-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+                    <Zap className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <span className="text-xl font-bold text-white tracking-tight">DevOps Panel</span>
+                    <span className="block text-[10px] text-zinc-500 -mt-0.5">Zero-Manual Infrastructure</span>
+                  </div>
+                </div>
 
-      {/* Tab Switcher */}
-      <div className="border-b border-zinc-800/50 bg-[#0F0F0F]/50 backdrop-blur-xl sticky top-16 z-40">
-        <div className="container mx-auto px-4">
-          <div className="flex gap-1 py-2">
+                {/* Nav */}
+                <nav className="hidden md:flex items-center gap-1">
+                  <button
+                    onClick={handleBackToFleet}
+                    className={`
+                      flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all
+                      ${view === 'fleet'
+                        ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
+                        : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+                      }
+                    `}
+                  >
+                    <LayoutGrid className="w-4 h-4" />
+                    Fleet Manager
+                  </button>
+                  <button
+                    onClick={handleDeployNew}
+                    className={`
+                      flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all
+                      ${view === 'deploy'
+                        ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                        : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+                      }
+                    `}
+                  >
+                    <Plus className="w-4 h-4" />
+                    Deploy New
+                  </button>
+                </nav>
+              </div>
+
+              {/* Status */}
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-zinc-500">Systems Online</span>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          {/* Mobile Nav */}
+          <div className="md:hidden border-b border-zinc-800/50 bg-black/50 px-4 py-2 flex gap-2">
             <button
-              onClick={() => setActiveTab('command')}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                activeTab === 'command'
-                  ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                  : 'text-zinc-500 hover:text-zinc-300'
+              onClick={handleBackToFleet}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium ${
+                view === 'fleet' ? 'bg-cyan-500/10 text-cyan-400' : 'text-zinc-500'
               }`}
             >
-              Command Center
+              Fleet
             </button>
             <button
-              onClick={() => setActiveTab('pipeline')}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                activeTab === 'pipeline'
-                  ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
-                  : 'text-zinc-500 hover:text-zinc-300'
+              onClick={handleDeployNew}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium ${
+                view === 'deploy' ? 'bg-purple-500/10 text-purple-400' : 'text-zinc-500'
               }`}
             >
-              Deploy Panel
-            </button>
-            <button
-              onClick={() => setActiveTab('docker')}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                activeTab === 'docker'
-                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                  : 'text-zinc-500 hover:text-zinc-300'
-              }`}
-            >
-              Docker Deploy
+              Deploy
             </button>
           </div>
-        </div>
-      </div>
 
-      <main className="container mx-auto px-4 py-6">
-        {activeTab === 'command' && <CommandCenter />}
+          {/* Main Content */}
+          <main>
+            <ProjectsGrid vercelToken={vercelToken} onDeployNew={handleDeployNew} />
+          </main>
+        </>
+      ) : (
+        <>
+          {/* Deploy View Header */}
+          <header className="sticky top-0 z-40 bg-black/90 backdrop-blur-xl border-b border-zinc-800/50">
+            <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-3 cursor-pointer" onClick={handleBackToFleet}>
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 via-purple-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+                    <Zap className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <span className="text-xl font-bold text-white tracking-tight">DevOps Panel</span>
+                    <span className="block text-[10px] text-zinc-500 -mt-0.5">Zero-Manual Infrastructure</span>
+                  </div>
+                </div>
 
-        {activeTab === 'pipeline' && <DeploymentPanel />}
+                <nav className="hidden md:flex items-center gap-1">
+                  <button
+                    onClick={handleBackToFleet}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-zinc-400 hover:text-white hover:bg-zinc-800/50 transition-all"
+                  >
+                    <LayoutGrid className="w-4 h-4" />
+                    Fleet Manager
+                  </button>
+                  <button
+                    onClick={handleDeployNew}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-purple-500/10 text-purple-400 border border-purple-500/20"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Deploy New
+                  </button>
+                </nav>
+              </div>
 
-        {activeTab === 'docker' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-1 space-y-6">
-              <NewProjectForm onDeploy={handleDeploy} />
-              <DeploymentList
-                deployments={deployments}
-                loading={loading}
-                selectedId={selectedDeployment?._id}
-                onSelect={setSelectedDeployment}
-                onStop={handleStop}
-                onDelete={handleDelete}
-              />
+              <button
+                onClick={handleBackToFleet}
+                className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
+              >
+                Back to Fleet
+              </button>
             </div>
-            <div className="lg:col-span-2">
-              <LogsTerminal deployment={selectedDeployment} />
-            </div>
+          </header>
+
+          {/* Mobile Nav */}
+          <div className="md:hidden border-b border-zinc-800/50 bg-black/50 px-4 py-2 flex gap-2">
+            <button
+              onClick={handleBackToFleet}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium ${
+                view === 'fleet' ? 'bg-cyan-500/10 text-cyan-400' : 'text-zinc-500'
+              }`}
+            >
+              Fleet
+            </button>
+            <button
+              onClick={handleDeployNew}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium ${
+                view === 'deploy' ? 'bg-purple-500/10 text-purple-400' : 'text-zinc-500'
+              }`}
+            >
+              Deploy
+            </button>
           </div>
-        )}
-      </main>
+
+          {/* Main Content */}
+          <main className="h-[calc(100vh-140px)]">
+            <CommandCenter />
+          </main>
+        </>
+      )}
     </div>
   );
 }

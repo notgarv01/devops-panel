@@ -2,6 +2,9 @@ const crypto = require('crypto');
 
 const GITHUB_API = 'https://api.github.com';
 
+// Store webhook secrets (in production, use a database)
+const webhookSecrets = new Map();
+
 class GitHubService {
   constructor(token) {
     this.token = token;
@@ -111,7 +114,10 @@ class GitHubService {
   }
 
   async createWebhook(owner, repo, webhookUrl, events = ['push', 'repository']) {
+    // Generate and store secret for this repo
     const secret = crypto.randomBytes(32).toString('hex');
+    const repoKey = `${owner}/${repo}`;
+    webhookSecrets.set(repoKey, secret);
 
     const webhook = await this.request('POST', `/repos/${owner}/${repo}/hooks`, {
       name: 'web',
@@ -132,6 +138,16 @@ class GitHubService {
     };
   }
 
+  // Get stored webhook secret for a repo
+  getWebhookSecret(owner, repo) {
+    return webhookSecrets.get(`${owner}/${repo}`);
+  }
+
+  // Store webhook secret
+  storeWebhookSecret(owner, repo, secret) {
+    webhookSecrets.set(`${owner}/${repo}`, secret);
+  }
+
   async listWebhooks(owner, repo) {
     return this.request('GET', `/repos/${owner}/${repo}/hooks`);
   }
@@ -142,6 +158,21 @@ class GitHubService {
 
   async getAuthenticatedUser() {
     return this.request('GET', '/user');
+  }
+
+  async getBranch(owner, repo, branch) {
+    try {
+      return await this.request('GET', `/repos/${owner}/${repo}/branches/${branch}`);
+    } catch (error) {
+      if (error.message.includes('404')) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async deleteBranch(owner, repo, branch) {
+    return this.request('DELETE', `/repos/${owner}/${repo}/git/refs/heads/${branch}`);
   }
 
   async addDeployKey(owner, repo, title, key) {

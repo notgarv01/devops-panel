@@ -1,9 +1,20 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const getApiUrl = () => {
+  const envUrl = import.meta.env.VITE_API_URL;
+  // If VITE_API_URL is explicitly set (even to empty string), use it
+  // Otherwise fallback to relative path for Vercel rewrites
+  if (envUrl !== undefined && envUrl !== null && envUrl !== '') {
+    return envUrl;
+  }
+  // Use relative path - Vercel rewrites will handle routing
+  return '';
+};
+
+const API_URL = getApiUrl();
 
 const api = axios.create({
-  baseURL: API_URL,
+  baseURL: API_URL || '/api',
   timeout: 120000,
 });
 
@@ -93,6 +104,37 @@ export const deployService = {
     const response = await api.get(`/vercel/deployment/${id}`, { params: { vercelToken: token } });
     return response.data;
   },
+
+  // Projects
+  getProjects: async () => {
+    const response = await api.get('/projects');
+    return response.data;
+  },
+
+  getProject: async (id) => {
+    const response = await api.get(`/projects/${id}`);
+    return response.data;
+  },
+
+  updateProjectStatus: async (id, status) => {
+    const response = await api.patch(`/projects/${id}/status`, { status });
+    return response.data;
+  },
+
+  addCustomDomain: async (projectId, vercelToken, domain) => {
+    const response = await api.post(`/projects/${projectId}/domain`, { vercelToken, domain });
+    return response.data;
+  },
+
+  rollbackProject: async (projectId, vercelToken, deploymentId = null) => {
+    const response = await api.post(`/projects/${projectId}/rollback`, { vercelToken, deploymentId });
+    return response.data;
+  },
+
+  getProjectDeployments: async (projectId, vercelToken) => {
+    const response = await api.get(`/projects/${projectId}/deployments`, { params: { vercelToken } });
+    return response.data;
+  }
 };
 
 export default api;

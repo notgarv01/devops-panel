@@ -83,7 +83,7 @@ export default function LogsTerminal({ deployment }) {
       {/* Terminal Output */}
       <div
         ref={logsContainerRef}
-        className="flex-1 overflow-y-auto p-4 font-mono text-sm bg-dark-900"
+        className="flex-1 overflow-y-auto p-4 font-mono text-sm bg-dark-900 scroll-smooth"
       >
         {deployment.logs && deployment.logs.length > 0 ? (
           <div className="space-y-1">
