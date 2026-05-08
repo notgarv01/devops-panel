@@ -462,32 +462,34 @@ const runTransformationPipeline = async (io, sessionId, config) => {
           // Wait for project to be fully ready (increased to 5s for env vars)
           await new Promise(r => setTimeout(r, 5000));
 
-          // Inject environment variables with retry logic
+          // Inject environment variables with sync & verify approach
           if (envVars.length > 0) {
-            logs.emit('info', `Setting ${envVars.length} environment variable(s)...`);
+            logs.emit('info', `Syncing ${envVars.length} environment variable(s)...`);
+            logs.emit('info', 'Syncing Environment Variables...');
 
+            // Auto-add VITE_ prefix for Vite projects if missing
+            const projectType = analysis.projectType.type;
+            const isViteProject = projectType === PROJECT_TYPES.FRONTEND_FRAMEWORK;
+
+            const envsObject = {};
             for (const envVar of envVars) {
-              let retries = 3;
-              while (retries > 0) {
-                try {
-                  await vercel.addEnvVar(project.id, {
-                    key: envVar.key,
-                    value: envVar.value,
-                    target: 'production',
-                    type: 'secret'
-                  });
-                  logs.emit('info', `  + ${envVar.key}`);
-                  break;
-                } catch (err) {
-                  retries--;
-                  if (retries === 0) {
-                    logs.emit('warning', `  Failed to set ${envVar.key}`);
-                  } else {
-                    logs.emit('info', `  Retrying ${envVar.key}...`);
-                    await new Promise(r => setTimeout(r, 2000));
-                  }
-                }
+              let key = envVar.key;
+              if (isViteProject && !key.startsWith('VITE_') && !key.startsWith('NODE_')) {
+                key = `VITE_${key}`;
+                logs.emit('info', `  Auto-prefixed ${envVar.key} → ${key}`);
               }
+              envsObject[key] = envVar.value;
+            }
+
+            await vercel.syncVercelEnvironment(project.id, vercelToken, envsObject);
+
+            const expectedKeys = Object.keys(envsObject);
+            const verification = await vercel.verifyEnvVars(project.id, expectedKeys, 5, 2000);
+
+            if (verification.verified) {
+              logs.emit('info', 'All environment variables confirmed by Vercel');
+            } else {
+              logs.emit('warning', `Missing vars: ${verification.missing.join(', ')}`);
             }
           }
 

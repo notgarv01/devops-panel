@@ -114,8 +114,8 @@ class VercelService {
     const {
       key,
       value,
-      target = 'production',
-      type = 'secret',
+      target = ['production', 'preview', 'development'],
+      type = 'plain',
       gitBranch = null
     } = envData;
 
@@ -126,6 +126,63 @@ class VercelService {
       type,
       ...(gitBranch && { gitBranch })
     });
+  }
+
+  async syncVercelEnvironment(projectId, token, envs) {
+    console.log(`[Vercel] Syncing ${Object.keys(envs).length} environment variables...`);
+    const results = [];
+    const errors = [];
+
+    for (const [key, value] of Object.entries(envs)) {
+      try {
+        const response = await this.request('POST', `/v10/projects/${projectId}/env`, {
+          key,
+          value: String(value),
+          type: 'plain',
+          target: ['production', 'preview', 'development']
+        });
+        results.push({ key, success: true });
+        console.log(`[Vercel] ✅ Set: ${key}`);
+      } catch (error) {
+        console.warn(`[Vercel] ⚠️ Issue setting ${key}: ${error.message}`);
+        errors.push({ key, error: error.message });
+      }
+    }
+
+    console.log(`[Vercel] Environment sync complete. ${results.length} succeeded, ${errors.length} failed`);
+    return { results, errors };
+  }
+
+  async verifyEnvVars(projectId, expectedKeys, maxRetries = 5, delayMs = 2000) {
+    console.log(`[Vercel] Verifying ${expectedKeys.length} environment variables...`);
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const vars = await this.request('GET', `/v10/projects/${projectId}/env`);
+
+        const missing = expectedKeys.filter(key => {
+          const found = vars.envs?.some(v => v.key === key);
+          return !found;
+        });
+
+        if (missing.length === 0) {
+          console.log(`[Vercel] All ${expectedKeys.length} environment variables verified`);
+          return { verified: true, missing: [] };
+        }
+
+        if (attempt < maxRetries) {
+          console.log(`[Vercel] Missing ${missing.length} vars (attempt ${attempt}/${maxRetries}), waiting...`);
+          await new Promise(r => setTimeout(r, delayMs));
+        }
+      } catch (error) {
+        console.warn(`[Vercel] Verify attempt ${attempt} failed: ${error.message}`);
+        if (attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, delayMs));
+        }
+      }
+    }
+
+    return { verified: false, missing: expectedKeys };
   }
 
   async addEnvVarsBatch(projectId, envVars) {
