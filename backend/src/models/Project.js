@@ -105,8 +105,8 @@ const ProjectSchema = new mongoose.Schema({
   }
 });
 
-// Index for faster queries
-ProjectSchema.index({ name: 1 });
+// Index for faster queries (name:1 removed - unique:true on field already creates index)
+// Note: unique:true in field definition automatically creates a unique index
 ProjectSchema.index({ owner: 1 });
 ProjectSchema.index({ status: 1 });
 ProjectSchema.index({ stackId: 1 });

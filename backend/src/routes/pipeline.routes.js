@@ -3,6 +3,7 @@ const router = express.Router();
 const { runTransformationPipeline } = require('../services/orchestrator');
 const { getQueueManager, initQueueManager } = require('../services/queueManager');
 const AuditLog = require('../models/AuditLog');
+const Project = require('../models/Project');
 
 // Initialize queue manager
 const queueManager = initQueueManager(process.env.REDIS_URL || null);
@@ -123,6 +124,34 @@ router.post('/run', async (req, res) => {
 
   // Use provided sessionId or generate new one
   const id = sessionId || `pipeline-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+  // PRE-ENQUEUE: Save/update project in MongoDB FIRST for dashboard visibility
+  try {
+    const existingProject = await Project.findOne({ name: projectName });
+    if (existingProject) {
+      await Project.findByIdAndUpdate(existingProject._id, {
+        status: 'queued',
+        repoUrl: projectPath,
+        githubUrl: projectPath,
+        lastDeployAt: new Date(),
+        sessionId: id
+      });
+    } else {
+      const newProject = new Project({
+        name: projectName,
+        repoUrl: projectPath,
+        githubUrl: projectPath,
+        status: 'queued',
+        sessionId: id,
+        lastDeployAt: new Date()
+      });
+      await newProject.save();
+    }
+    console.log(`[Pipeline:${id}] Project record created/updated in MongoDB`);
+  } catch (dbError) {
+    console.error(`[Pipeline:${id}] Failed to save project record:`, dbError.message);
+    // Continue anyway - the job will still run
+  }
 
   // Get queue status for position
   const queueStatus = queueManager.getQueueStatus('deployments');

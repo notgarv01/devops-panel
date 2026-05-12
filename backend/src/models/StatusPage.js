@@ -79,8 +79,7 @@ const StatusPageSchema = new mongoose.Schema({
   }
 });
 
-// Index for fast lookups
-StatusPageSchema.index({ slug: 1 });
+// Index for fast lookups (slug:1 removed - unique:true on field already creates index)
 StatusPageSchema.index({ published: 1 });
 
 // Calculate uptime percentage

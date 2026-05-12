@@ -4,7 +4,8 @@ const path = require('path');
 const PROJECT_TYPES = {
   STATIC: 'STATIC',
   NODE_API: 'NODE_API',
-  FRONTEND_FRAMEWORK: 'FRONTEND_FRAMEWORK'
+  FRONTEND_FRAMEWORK: 'FRONTEND_FRAMEWORK',
+  MERN: 'MERN'
 };
 
 const BACKEND_SIGNALS = ['express', 'mongoose', 'koa', 'fastify', 'hapi', 'nestjs', 'sails', 'feathers'];
@@ -189,7 +190,12 @@ exports.detectProjectType = async (workDir) => {
 
   // RULE 4: Check subdirectories for nested projects (limit depth)
   const pkgPaths = await findPackageJsons(workDir, 2);
-  for (const pkgPath of pkgPaths.slice(0, 5)) { // Max 5 subdirs
+  let hasBackend = false;
+  let hasFrontend = false;
+  let backendDir = null;
+  let frontendDir = null;
+
+  for (const pkgPath of pkgPaths.slice(0, 10)) { // Max 10 subdirs
     if (pkgPath === 'package.json') continue; // Skip root
 
     const subDir = path.dirname(path.join(workDir, pkgPath));
@@ -199,10 +205,43 @@ exports.detectProjectType = async (workDir) => {
     const deps = { ...(subPkg.dependencies || {}), ...(subPkg.devDependencies || {}) };
     const allDeps = Object.keys(deps).map(d => d.toLowerCase());
 
-    const hasBackend = BACKEND_SIGNALS.some(sig => allDeps.some(d => d.includes(sig)));
-    const hasFrontend = FRONTEND_SIGNALS.some(sig => allDeps.some(d => d.includes(sig)));
+    const hasBackendInDir = BACKEND_SIGNALS.some(sig => allDeps.some(d => d.includes(sig)));
+    const hasFrontendInDir = FRONTEND_SIGNALS.some(sig => allDeps.some(d => d.includes(sig)));
 
-    if (hasBackend) {
+    if (hasBackendInDir) {
+      hasBackend = true;
+      backendDir = subDir;
+    }
+    if (hasFrontendInDir) {
+      hasFrontend = true;
+      frontendDir = subDir;
+    }
+  }
+
+  // If both frontend and backend exist, it's a MERN stack
+  if (hasBackend && hasFrontend) {
+    return {
+      type: PROJECT_TYPES.MERN,
+      confidence: 0.85,
+      signals: [`backend: ${backendDir}`, `frontend: ${frontendDir}`],
+      reasoning: `Found both frontend and backend in subdirectories`
+    };
+  }
+
+  // Continue with individual detections
+  for (const pkgPath of pkgPaths.slice(0, 5)) {
+    if (pkgPath === 'package.json') continue;
+
+    const subPkg = await readJsonFile(path.join(workDir, pkgPath));
+    if (!subPkg) continue;
+
+    const deps = { ...(subPkg.dependencies || {}), ...(subPkg.devDependencies || {}) };
+    const allDeps = Object.keys(deps).map(d => d.toLowerCase());
+
+    const hasBackendSignal = BACKEND_SIGNALS.some(sig => allDeps.some(d => d.includes(sig)));
+    const hasFrontendSignal = FRONTEND_SIGNALS.some(sig => allDeps.some(d => d.includes(sig)));
+
+    if (hasBackendSignal) {
       return {
         type: PROJECT_TYPES.NODE_API,
         confidence: 0.7,
@@ -211,7 +250,7 @@ exports.detectProjectType = async (workDir) => {
       };
     }
 
-    if (hasFrontend) {
+    if (hasFrontendSignal) {
       return {
         type: PROJECT_TYPES.FRONTEND_FRAMEWORK,
         confidence: 0.7,

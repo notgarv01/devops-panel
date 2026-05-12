@@ -11,14 +11,15 @@ const Project = require('../models/Project');
 const { createAIService, parseBuildError } = require('./ai.service');
 const { SecretSentinel } = require('./secretSentinel');
 
-// Project persistence helper
+// Project persistence helper - ensures project exists and updates status
 const updateProjectStatus = async (projectName, updates) => {
   try {
     await Project.findOneAndUpdate(
       { name: projectName },
-      { ...updates, updatedAt: new Date() },
-      { new: true, upsert: false }
+      { ...updates, updatedAt: new Date(), status: updates.status || 'building' },
+      { new: true, upsert: true }
     );
+    console.log(`[Project] Updated: ${projectName} -> ${updates.status}`);
   } catch (error) {
     console.log(`[Project] Failed to update status: ${error.message}`);
   }
@@ -142,63 +143,107 @@ const transmuteSourceCode = async (workDir, logs, options = {}) => {
   const { projectType, envVars = [] } = options;
   const isViteProject = projectType === PROJECT_TYPES.FRONTEND_FRAMEWORK;
 
+  // Use Vite syntax for frontend frameworks, Node syntax for backend
+  const envPrefix = isViteProject ? 'import.meta.env.VITE_' : 'process.env.VITE_';
+  const envVarRef = isViteProject ? 'import.meta.env.VITE_API_URL' : 'process.env.VITE_API_URL';
+
   const results = {
     filesModified: 0,
     fixes: []
   };
 
   const transmutationRules = [
+    // Pattern 0: Fix ${import.meta.env.VITE_API_URL} in template literals
     {
-      pattern: /(https?:\/\/)localhost:(\d+)/gi,
-      replace: (match, protocol, port) => {
-        results.fixes.push({
-          file: 'pattern-replace',
-          find: match,
-          replace: `${protocol}process.env.VITE_API_URL`
-        });
-        return `${protocol}process.env.VITE_API_URL`;
+      pattern: /\$\{import\.meta\.env\.VITE_API_URL\}/g,
+      replace: (match) => {
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `""` });
+        return `""`;
       }
     },
+    // Pattern 1: Fix ${process.env.VITE_API_URL} in template literals
     {
-      pattern: /fetch\s*\(\s*['"]http:\/\/localhost:\d+[^'"]*['"]\s*/gi,
+      pattern: /\$\{process\.env\.VITE_API_URL\}/g,
       replace: (match) => {
-        results.fixes.push({
-          file: 'pattern-replace',
-          find: match,
-          replace: 'fetch(process.env.VITE_API_URL + '
-        });
-        return match.replace(/fetch\s*\(\s*['"]http:\/\/localhost:\d+/gi, 'fetch(process.env.VITE_API_URL + "');
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `""` });
+        return `""`;
       }
     },
+    // Pattern 2: Fix "undefined0" literal strings
     {
-      pattern: /baseURL:\s*['"]http:\/\/localhost:\d+[^'"]*['"]/gi,
+      pattern: /['"]undefined0['"]/g,
       replace: (match) => {
-        results.fixes.push({
-          file: 'pattern-replace',
-          find: match,
-          replace: "baseURL: process.env.VITE_API_URL"
-        });
-        return "baseURL: process.env.VITE_API_URL";
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `""` });
+        return `""`;
       }
     },
+    // Pattern 3: Fix import.meta.env.VITE_API_URL + "/api" concatenations
     {
-      pattern: /(const|let|var)\s+API_URL\s*=\s*['"]https?:\/\/localhost:\d+[^'"]*['"]/gi,
+      pattern: /import\.meta\.env\.VITE_API_URL\s*\+\s*['"]([^'"]*)['"]/g,
+      replace: (match, path) => {
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `"" + "${path}"` });
+        return `"" + "${path}"`;
+      }
+    },
+    // Pattern 4: Same for process.env
+    {
+      pattern: /process\.env\.VITE_API_URL\s*\+\s*['"]([^'"]*)['"]/g,
+      replace: (match, path) => {
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `"" + "${path}"` });
+        return `"" + "${path}"`;
+      }
+    },
+    // Pattern 5: Fix bare import.meta.env.VITE_API_URL
+    {
+      pattern: /import\.meta\.env\.VITE_API_URL(?![\s\+])/g,
       replace: (match) => {
-        results.fixes.push({
-          file: 'pattern-replace',
-          find: match,
-          replace: "$1API_URL = process.env.VITE_API_URL || ''"
-        });
-        return "$1API_URL = process.env.VITE_API_URL || ''";
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `""` });
+        return `""`;
+      }
+    },
+    // Pattern 6: Same for process.env
+    {
+      pattern: /process\.env\.VITE_API_URL(?![\s\+])/g,
+      replace: (match) => {
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `""` });
+        return `""`;
+      }
+    },
+    // Pattern 7: Fix localhost URLs - for API configs, use empty string (Vercel rewrites handle routing)
+    // "http://localhost:3000" -> ""
+    // "http://localhost:5173/api" -> "" (let Vercel proxy /api/*)
+    {
+      pattern: /['"]https?:\/\/localhost:\d+(\/[^'"]*)?['"]/g,
+      replace: (match) => {
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `""` });
+        return `""`;
+      }
+    },
+    // Pattern 8: Fix fetch('http://localhost:3000/api') -> fetch('/api')
+    {
+      pattern: /fetch\s*\(\s*['"]https?:\/\/localhost:\d+(\/[^'"]*)?['"]\s*\)/gi,
+      replace: (match) => {
+        const pathMatch = match.match(/:\d+(\/.+)?['"]\s*\)/);
+        let path = pathMatch && pathMatch[1] ? pathMatch[1] : '/';
+        if (!path.startsWith('/')) path = '/' + path;
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `fetch("${path}")` });
+        return `fetch("${path}")`;
+      }
+    },
+    // Pattern 9: Fix baseURL: 'http://localhost:3000' -> baseURL: ''
+    {
+      pattern: /baseURL:\s*['"]https?:\/\/localhost:\d+(\/[^'"]*)?['"]/gi,
+      replace: (match) => {
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `baseURL: ""` });
+        return `baseURL: ""`;
       }
     }
   ];
 
-  const sourceDirs = ['src', 'client', 'frontend', 'app', 'components', 'pages', 'lib', 'utils', 'api', 'services'];
   const sourceExtensions = ['.js', '.jsx', '.ts', '.tsx', '.vue', '.svelte'];
 
   const scanDir = async (dir, depth = 0) => {
-    if (depth > 5) return;
+    if (depth > 8) return; // Increased depth for nested MERN structures
 
     try {
       const entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -206,11 +251,15 @@ const transmuteSourceCode = async (workDir, logs, options = {}) => {
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
 
-        if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' || entry.name === 'build' || entry.name === '.next') {
+        // Skip these directories
+        if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' ||
+            entry.name === 'build' || entry.name === '.next' || entry.name === '.nuxt' ||
+            entry.name === '__pycache__' || entry.name === '.cache' || entry.name === 'coverage') {
           continue;
         }
 
         if (entry.isDirectory()) {
+          // Scan ALL directories recursively (including frontend/, backend/, src/, etc.)
           await scanDir(fullPath, depth + 1);
         } else if (entry.isFile()) {
           const ext = path.extname(entry.name).toLowerCase();
@@ -219,7 +268,9 @@ const transmuteSourceCode = async (workDir, logs, options = {}) => {
           await processFile(fullPath);
         }
       }
-    } catch (err) {}
+    } catch (err) {
+      console.log(`[Transmute] Cannot scan ${dir}: ${err.message}`);
+    }
   };
 
   const processFile = async (filePath) => {
@@ -228,40 +279,43 @@ const transmuteSourceCode = async (workDir, logs, options = {}) => {
       let modified = false;
       const originalContent = content;
 
-      for (const rule of transmutationRules) {
-        if (rule.replace) {
-          const newContent = content.replace(rule.pattern, rule.replace);
-          if (newContent !== content) {
-            content = newContent;
-            modified = true;
-          }
-        }
+      // Check if file contains any patterns we're looking for (optimization)
+      const hasTargetPatterns = /localhost|import\.meta\.env\.VITE_API_URL|process\.env\.VITE_API_URL|undefined/.test(content);
+      if (!hasTargetPatterns) {
+        return; // Skip files that don't contain target patterns
       }
 
-      // Add VITE_ prefix to process.env.X calls if missing (for Vite projects)
-      if (isViteProject) {
-        const nonViteEnvs = ['NODE_ENV', 'PORT', 'HOST', 'HOME', 'PATH', 'USER', 'SHELL'];
-        const pattern = /process\.env\.([A-Z_][A-Z0-9_]*)/gi;
-        content = content.replace(pattern, (match, varName) => {
-          if (nonViteEnvs.includes(varName)) return match;
-          if (!varName.startsWith('VITE_')) {
-            results.fixes.push({
-              file: path.relative(workDir, filePath),
-              find: match,
-              replace: `process.env.VITE_${varName}`
-            });
-            return `process.env.VITE_${varName}`;
+      // Run multiple passes to handle chained transformations
+      let passCount = 0;
+      const maxPasses = 3;
+
+      while (passCount < maxPasses) {
+        let thisPassModified = false;
+
+        for (const rule of transmutationRules) {
+          if (rule.replace) {
+            const newContent = content.replace(rule.pattern, rule.replace);
+            if (newContent !== content) {
+              content = newContent;
+              thisPassModified = true;
+              modified = true;
+            }
           }
-          return match;
-        });
-        if (content !== originalContent) modified = true;
+        }
+
+        // If no changes in this pass, stop iterating
+        if (!thisPassModified) break;
+        passCount++;
       }
 
       if (modified) {
         await fs.promises.writeFile(filePath, content, 'utf8');
         results.filesModified++;
+        console.log(`[Transmute] Modified: ${path.relative(workDir, filePath)}`);
       }
-    } catch (err) {}
+    } catch (err) {
+      console.log(`[Transmute] Error processing ${filePath}: ${err.message}`);
+    }
   };
 
   await scanDir(workDir);
@@ -456,15 +510,18 @@ const runTransformationPipeline = async (io, sessionId, config) => {
 
     logs.emit('info', `Authenticated as: ${user.name || owner}`);
 
-    // Use original repo name (from the cloned repo URL)
-    const originalRepoName = repoInfo ? repoInfo.repo : projectName.replace(/[^a-zA-Z0-9-_]/g, '-');
+    // Use user's project name for Vercel (sanitize for URL safety)
+    const vercelProjectName = projectName.replace(/[^a-zA-Z0-9-]/g, '-').substring(0, 40);
+    const originalRepoName = repoInfo ? repoInfo.repo : vercelProjectName;
     const repoUrl = repoInfo ? repoInfo.url : projectPath;
 
     const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
     // Push code to NEW BRANCH in SAME REPO
     logs.emit('info', `Pushing to ${targetBranch} branch in original repo...`);
-    const remoteUrl = repoUrl.replace('.git', '').replace('https://', `https://x-access-token:${githubToken}@`);
+    // Build authenticated URL: https://github.com/owner/repo -> https://x-access-token:TOKEN@github.com/owner/repo
+    const cleanRepoUrl = repoUrl.replace(/\.git\/?$/, '').replace(/\/+$/, '');
+    const remoteUrl = cleanRepoUrl.replace('://', `://x-access-token:${githubToken}@`);
 
     try {
       const git = simpleGit(workDir);
@@ -592,22 +649,22 @@ const runTransformationPipeline = async (io, sessionId, config) => {
       const vercel = createVercelService(vercelToken);
 
       try {
-        logs.emit('info', `Checking for existing Vercel project...`);
+        logs.emit('info', `Checking for existing Vercel project: ${vercelProjectName}...`);
 
         let project;
         try {
-          project = await vercel.getProject(originalRepoName);
+          project = await vercel.getProject(vercelProjectName);  // Use user's project name
         } catch (err) {
-          logs.emit('warning', `getProject error: ${err.message}`);
+          logs.emit('info', `No existing project with name: ${vercelProjectName}`);
           project = null;
         }
 
         if (!project) {
-          logs.emit('info', `Creating Vercel project: ${originalRepoName}`);
+          logs.emit('info', `Creating Vercel project: ${vercelProjectName}`);
 
           try {
             const createData = {
-              name: originalRepoName,
+              name: vercelProjectName,  // Use user's project name
               gitRepository: {
                 type: 'github',
                 repo: `${repoInfo?.owner || owner}/${originalRepoName}`
@@ -697,11 +754,22 @@ const runTransformationPipeline = async (io, sessionId, config) => {
           logs.emit('info', `Triggering deployment...`);
 
           try {
+            const projectType = analysis.projectType.type;
+            // Detect frontend folder for correct output directory
+            const hasFrontendFolder = fs.existsSync(path.join(workDir, 'frontend')) ||
+                                      fs.existsSync(path.join(workDir, 'client'));
+            const outputDir = hasFrontendFolder ? 'frontend/dist' : 'dist';
+
             const deploymentData = {
-              name: originalRepoName,
+              name: vercelProjectName,  // Use user's project name for Vercel
+              projectId: project.id,  // Link to existing project
               gitSource: {
                 type: 'github'
-              }
+              },
+              // For MERN/frontend projects, set output directory
+              ...(projectType === 'MERN' && {
+                outputDirectory: outputDir
+              })
             };
 
             if (repoId) {
@@ -763,16 +831,25 @@ const runTransformationPipeline = async (io, sessionId, config) => {
                 logs.success(`Live at: https://${buildLogResult.url}`);
                 logs.success('===== Pipeline Complete =====');
 
-                // Update project to live status
+                // Update project to live status and save Vercel details
                 await updateProjectStatus(projectName, {
                   status: 'live',
                   vercelUrl: `https://${buildLogResult.url}`,
+                  vercelProjectId: project?.id,
                   lastDeployAt: new Date(),
                   lastWebhookAt: new Date()
                 });
                 emitProjectUpdate(io, projectName, 'live', {
                   url: `https://${buildLogResult.url}`
                 });
+
+                // Update project to live status
+                await updateProjectStatus(projectName, {
+                  status: 'live',
+                  vercelUrl: `https://${buildLogResult.url}`,
+                  lastDeployAt: new Date()
+                });
+                emitProjectUpdate(io, projectName, 'live', { url: `https://${buildLogResult.url}` });
 
                 // Send success notification
                 try {
@@ -795,7 +872,7 @@ const runTransformationPipeline = async (io, sessionId, config) => {
                   success: true,
                   repository: repoUrl,
                   branch: targetBranch,
-                  project: originalRepoName,
+                  project: vercelProjectName,  // Use user's project name
                   deployment: `https://${buildLogResult.url}`
                 };
               } else if (buildLogResult.status === 'ERROR') {
@@ -873,21 +950,17 @@ const runTransformationPipeline = async (io, sessionId, config) => {
     logs.success('===== Pipeline Complete =====', {
       repository: repoUrl,
       branch: targetBranch,
-      project: originalRepoName
+      project: vercelProjectName  // Use user's project name
     });
 
-    // Update project to live status (for non-Vercel deployments too)
-    await updateProjectStatus(projectName, {
-      status: 'live',
-      lastDeployAt: new Date()
-    });
-    emitProjectUpdate(io, projectName, 'live');
+    // Don't update to 'live' here - only successful Vercel build updates to 'live'
+    // This prevents "live" being shown when deployment actually failed
 
     return {
       success: true,
       repository: repoUrl,
       branch: targetBranch,
-      project: originalRepoName
+      project: vercelProjectName  // Use user's project name
     };
 
   } catch (error) {

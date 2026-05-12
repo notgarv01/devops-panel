@@ -29,7 +29,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Create or update project (upsert)
+// Create project with STRICT unique name check
 router.post('/', async (req, res) => {
   try {
     const {
@@ -44,32 +44,54 @@ router.post('/', async (req, res) => {
       environment
     } = req.body;
 
-    const project = await Project.findOneAndUpdate(
-      { name },
-      {
-        $set: {
-          owner,
-          repoUrl,
-          targetBranch: targetBranch || `devops-deploy-${name.slice(0, 8).toLowerCase()}`,
-          vercelProjectId,
-          vercelUrl,
-          githubUrl,
-          framework: framework || 'unknown',
-          environment: environment || 'production',
-          lastDeployAt: new Date(),
-          status: 'live'
-        },
-        $setOnInsert: {
-          createdAt: new Date()
+    // STRICT CHECK: Reject duplicate names
+    const existingProject = await Project.findOne({ name });
+    if (existingProject) {
+      return res.status(400).json({
+        success: false,
+        error: 'A project with this name already exists. Please choose a unique name.',
+        existingProject: {
+          id: existingProject._id,
+          name: existingProject.name,
+          status: existingProject.status,
+          vercelUrl: existingProject.vercelUrl
         }
-      },
-      { new: true, upsert: true }
-    );
+      });
+    }
 
-    res.status(201).json(project);
+    // Create new project with initial 'queued' status for dashboard visibility
+    const project = new Project({
+      name,
+      owner,
+      repoUrl,
+      targetBranch: targetBranch || `devops-deploy-${name.slice(0, 8).toLowerCase()}`,
+      vercelProjectId,
+      vercelUrl,
+      githubUrl,
+      framework: framework || 'unknown',
+      environment: environment || 'production',
+      status: 'queued',  // Dashboard-visible state
+      lastDeployAt: new Date()
+    });
+
+    await project.save();
+
+    // Emit WebSocket event so dashboard creates the project card immediately
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('project-created', {
+        id: project._id,
+        name: project.name,
+        status: project.status,
+        framework: project.framework,
+        createdAt: project.createdAt
+      });
+    }
+
+    res.status(201).json({ success: true, project });
   } catch (error) {
     console.error('Error creating project:', error);
-    res.status(500).json({ error: 'Failed to save project' });
+    res.status(500).json({ success: false, error: 'Failed to save project' });
   }
 });
 

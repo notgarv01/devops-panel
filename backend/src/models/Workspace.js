@@ -117,8 +117,7 @@ const WorkspaceSchema = new mongoose.Schema({
   }
 });
 
-// Indexes
-WorkspaceSchema.index({ slug: 1 });
+// Indexes (slug:1 removed - unique:true on field already creates index)
 WorkspaceSchema.index({ owner: 1 });
 WorkspaceSchema.index({ 'members.userId': 1 });
 

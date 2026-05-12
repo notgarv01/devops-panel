@@ -322,7 +322,8 @@ class VercelService {
     const {
       name,
       gitSource,
-      target = null,
+      projectId = null,
+      target = 'production',  // Default to production
       forceNew = false,
       bypass = false,
       withCache = true,
@@ -336,8 +337,16 @@ class VercelService {
     } = deploymentData;
 
     const body = {
-      name
+      name,
+      target  // Explicitly set target (production or preview)
     };
+
+    // Include projectId as query parameter for existing projects
+    // NOT as part of the request body
+    const queryParams = [];
+    if (projectId) {
+      queryParams.push(`projectId=${projectId}`);
+    }
 
     // Handle gitSource - Vercel v13 prefers repoId over repo string
     if (gitSource) {
@@ -351,11 +360,29 @@ class VercelService {
       if (!gitSource.repoId && gitSource.repo) {
         gs.repo = gitSource.repo;
       }
+      // Also set gitSource.target for branch-level targeting
+      if (target) {
+        gs.target = target;
+      }
       body.gitSource = gs;
     }
 
-    const endpoint = teamId ? `/v13/deployments?teamId=${teamId}` : '/v13/deployments';
-    console.log(`[Vercel] POST ${endpoint} body:`, JSON.stringify(body).substring(0, 300));
+    // Force new deployment if requested
+    if (forceNew) {
+      body.forceNew = true;
+    }
+
+    // Add build settings if provided
+    if (buildCommand) body.buildCommand = buildCommand;
+    if (outputDirectory) body.outputDirectory = outputDirectory;
+    if (rootDirectory) body.rootDirectory = rootDirectory;
+    if (regions && regions.length) body.regions = regions;
+    if (!withCache) body.withCache = false;
+
+    const endpoint = teamId
+      ? `/v13/deployments?teamId=${teamId}${queryParams.length ? '&' + queryParams.join('&') : ''}`
+      : (queryParams.length ? `/v13/deployments?${queryParams.join('&')}` : '/v13/deployments');
+    console.log(`[Vercel] POST ${endpoint} body:`, JSON.stringify(body).substring(0, 500));
     return this.request('POST', endpoint, body);
   }
 
