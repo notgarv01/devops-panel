@@ -133,14 +133,36 @@ class VercelService {
     const results = [];
     const errors = [];
 
+    // First, get existing env vars to check what's already set
+    let existingKeys = [];
+    try {
+      const existing = await this.getEnvVars(projectId);
+      existingKeys = existing.envs?.map(e => e.key) || [];
+      console.log(`[Vercel] Existing vars: ${existingKeys.join(', ') || 'none'}`);
+    } catch (err) {
+      console.log(`[Vercel] Could not fetch existing vars: ${err.message}`);
+    }
+
     for (const [key, value] of Object.entries(envs)) {
       try {
-        const response = await this.request('POST', `/v10/projects/${projectId}/env`, {
-          key,
-          value: String(value),
-          type: 'plain',
-          target: ['production', 'preview', 'development']
-        });
+        let response;
+        // Use PATCH if variable exists, POST for new variables
+        if (existingKeys.includes(key)) {
+          console.log(`[Vercel] Updating existing: ${key}`);
+          response = await this.request('PATCH', `/v10/projects/${projectId}/env`, {
+            key,
+            value: String(value),
+            type: 'plain',
+            target: ['production', 'preview', 'development']
+          });
+        } else {
+          response = await this.request('POST', `/v10/projects/${projectId}/env`, {
+            key,
+            value: String(value),
+            type: 'plain',
+            target: ['production', 'preview', 'development']
+          });
+        }
         results.push({ key, success: true });
         console.log(`[Vercel] ✅ Set: ${key}`);
       } catch (error) {

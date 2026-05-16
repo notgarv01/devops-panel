@@ -4,11 +4,89 @@ const path = require('path');
 
 const PROJECT_TYPES = require('./analyzer').PROJECT_TYPES;
 
-// Patterns that indicate MERN stack
-const MERN_PATTERNS = {
-  backend: ['express', 'mongoose', 'koa', 'fastify', 'hapi'],
-  frontend: ['react', 'vue', 'next', 'angular', 'svelte'],
-  fullstack: ['concurrently', 'rootPkgHasBoth']
+// Helper: Convert ES modules to CommonJS
+const convertToCommonJS = (content) => {
+  let result = content;
+
+  // Convert: import x from 'y' -> const x = require('y')
+  result = result.replace(/import\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g, "const $1 = require('$2')");
+
+  // Convert: import { x, y } from 'z' -> const { x, y } = require('z')
+  result = result.replace(/import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g, "const { $1 } = require('$2')");
+
+  // Convert: import * as x from 'y' -> const x = require('y')
+  result = result.replace(/import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g, "const $1 = require('$2')");
+
+  // Convert: import 'x' (side effect only) -> require('x')
+  result = result.replace(/import\s+['"]([^'"]+)['"]/g, "require('$1')");
+
+  // Convert: export default x -> module.exports = x
+  result = result.replace(/export\s+default\s+(.+?);?\s*$/gm, 'module.exports = $1;');
+  result = result.replace(/export\s+default\s+/g, 'module.exports = ');
+
+  // Convert: export const/let/var x -> const/let/var x (remove export)
+  result = result.replace(/export\s+(const|let|var)\s+/g, '$1 ');
+
+  return result;
+};
+
+// Helper: Transform a single JS file to CommonJS
+const transformJsFile = async (filePath) => {
+  try {
+    let content = await fsp.readFile(filePath, 'utf8');
+    const originalContent = content;
+
+    // Remove app.listen (only in server files)
+    content = content.replace(/app\.listen\s*\(.*\);?/g, '');
+    content = content.replace(/server\.listen\s*\(.*\);?/g, '');
+
+    // Check if uses ES modules
+    const usesEsModules = /^\s*import\s+/m.test(content);
+
+    if (usesEsModules) {
+      content = convertToCommonJS(content);
+    }
+
+    // Ensure module.exports if needed
+    if (filePath.endsWith('server.js') || filePath.endsWith('index.js')) {
+      if (!/module\.exports/.test(content) && /const\s+app\s*=/.test(content)) {
+        content = content.trim() + '\n\nmodule.exports = app;\n';
+      }
+    }
+
+    if (content !== originalContent) {
+      await fsp.writeFile(filePath, content, 'utf8');
+      console.log(`[Transform] Converted: ${path.basename(filePath)}`);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.log(`[Transform] Error transforming ${filePath}:`, err.message);
+    return false;
+  }
+};
+
+// Helper: Recursively transform all JS files in a directory
+const transformAllJsFiles = async (dir, depth = 0) => {
+  if (depth > 5) return;
+
+  try {
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        if (entry.name !== 'node_modules' && entry.name !== '.git') {
+          await transformAllJsFiles(fullPath, depth + 1);
+        }
+      } else if (entry.name.endsWith('.js')) {
+        await transformJsFile(fullPath);
+      }
+    }
+  } catch (err) {
+    console.log(`[Transform] Error scanning ${dir}:`, err.message);
+  }
 };
 
 const generateVercelConfig = (projectType, config = {}) => {
@@ -31,8 +109,6 @@ const generateVercelConfig = (projectType, config = {}) => {
       use: '@vercel/static-build',
       config: { distDir: 'dist' }
     });
-
-    // Add API proxy rewrite for frontend to call backend in same deployment
     baseConfig.rewrites = [
       { source: '/api/:path*', destination: '/api/:path*' },
       { source: '/(.*)', destination: '/index.html' }
@@ -45,13 +121,9 @@ const generateVercelConfig = (projectType, config = {}) => {
       src: 'api/**/*.js',
       use: '@vercel/node'
     });
-
-    // Route ALL traffic to the serverless function
     baseConfig.rewrites = [
       { source: '/(.*)', destination: '/api/index.js' }
     ];
-
-    // Headers for CORS
     baseConfig.headers = [
       {
         source: '/(.*)',
@@ -63,7 +135,6 @@ const generateVercelConfig = (projectType, config = {}) => {
       }
     ];
 
-    // For MERN, also add frontend build
     if (projectType === 'MERN') {
       baseConfig.builds.push({
         src: 'package.json',
@@ -102,7 +173,6 @@ const findServerFile = async (dir) => {
     try {
       const entries = await fsp.readdir(currentDir, { withFileTypes: true });
 
-      // First check named candidates in current directory
       for (const candidate of candidates) {
         const filePath = path.join(currentDir, candidate);
         if (!scanned.has(filePath)) {
@@ -115,7 +185,6 @@ const findServerFile = async (dir) => {
         }
       }
 
-      // Then scan all subdirectories and files recursively
       for (const entry of entries) {
         const fullPath = path.join(currentDir, entry.name);
         if (scanned.has(fullPath)) continue;
@@ -168,89 +237,74 @@ const transformServerFile = async (workDir, serverFile) => {
 
   let content = serverFile.content || await fsp.readFile(serverFile.path, 'utf8');
 
-  // Transform Express app for Vercel serverless
-  // Vercel expects: module.exports = async (req, res) => { ... }
-  // For Express: need async wrapper with error handling
-
-  // Check if server exports properly or uses app.listen
   const hasAppListen = /app\.listen\s*\(/.test(content);
   const hasModuleExports = /module\.exports/.test(content);
-  const hasMongoose = /mongoose/.test(content);
 
   if (hasAppListen || !hasModuleExports) {
-    // Remove app.listen and add proper Vercel serverless export
-    content = content.replace(/app\.listen\s*\(.*\);?/g, '');
-    content = content.replace(/server\.listen\s*\(.*\);?/g, '');
+    // Remove app.listen
+    let transformedContent = content.replace(/app\.listen\s*\(.*\);?/g, '');
+    transformedContent = transformedContent.replace(/server\.listen\s*\(.*\);?/g, '');
 
-    // Generate standalone api/index.js that requires app from original location
-    // The server.js is the entry point, so we require it directly
-    const isStandaloneServer = content.includes('const app = express()') ||
-                               content.includes('const app = require');
+    // Check if file uses ES modules
+    const usesEsModules = /^\s*import\s+/m.test(transformedContent);
 
-    // Build standalone handler
-    let standaloneHandler;
+    // Convert ES modules to CommonJS
+    if (usesEsModules) {
+      console.log('[Transform] Converting ES modules to CommonJS');
+      transformedContent = convertToCommonJS(transformedContent);
+    }
 
-    if (isStandaloneServer) {
-      // Server file has app defined inline - execute it and get the app
-      standaloneHandler = `
-const serverContent = require('./server.js');
-const app = typeof serverContent === 'function' ? serverContent :
-            (serverContent && serverContent.app) ? serverContent.app :
-            serverContent;
+    // Ensure module.exports exists
+    if (!/module\.exports/.test(transformedContent)) {
+      transformedContent = transformedContent.trim() + '\n\nmodule.exports = app;\n';
+    }
 
-module.exports = async (req, res) => {
-  if (!app || typeof app !== 'function') {
-    return res.status(500).json({ success: false, error: 'App not found' });
-  }
-  return app(req, res);
-};`;
-    } else {
-      // Try to require from the server file
-      standaloneHandler = `
-let app;
-try {
-  // Try to get app from server.js export
-  const serverModule = require('./server.js');
-  app = serverModule.app || serverModule;
-} catch (e) {
-  console.error('[API] Failed to require server:', e.message);
-}
+    // Write the transformed server.js to api folder
+    const transformedServerPath = path.join(apiDir, 'server.js');
+    await fsp.writeFile(transformedServerPath, transformedContent);
+    console.log('[Transform] Wrote transformed server.js to api/');
+
+    // Generate handler that properly requires app.js from api/src/
+    // Optimized for CommonJS - waits for MongoDB before processing
+    const standaloneHandler = `
+const app = require('../backend/src/app');
+const mongoose = require('mongoose');
 
 module.exports = async (req, res) => {
-  if (!app) {
-    return res.status(500).json({ success: false, error: 'App not initialized' });
+  // Wait for MongoDB to be READY before processing any request
+  if (mongoose.connection.readyState !== 1) {
+    try {
+      await mongoose.connect(process.env.MONGO_URI);
+    } catch (err) {
+      return res.status(500).json({ success: false, error: "DATABASE_CONNECTION_FAILED" });
+    }
   }
+
   try {
     return app(req, res);
   } catch (error) {
-    console.error('[API] Error:', error.message);
-    return res.status(500).json({ success: false, error: error.message });
+    return res.status(500).json({ success: false, error: "APP_RUNTIME_ERROR", message: error.message });
   }
 };`;
-    }
 
-    // Write standalone handler instead of transforming inline
     await fsp.writeFile(apiIndexPath, standaloneHandler);
     result.transformed = true;
     result.files.push(apiIndexPath);
-    console.log('[Transform] Wrote standalone serverless handler to api/index.js');
+    console.log('[Transform] Wrote serverless handler to api/index.js');
 
-    return result;
+    // Don't return yet - still need to copy dependencies
   } else {
-    // Already has module.exports - handle it
     const existingExport = content.match(/module\.exports\s*=\s*(.+)/)?.[1];
     if (existingExport) {
-      // Write the original content as-is since it already exports properly
       await fsp.writeFile(apiIndexPath, content);
       result.transformed = false;
       result.files.push(apiIndexPath);
       console.log('[Transform] Server already has module.exports, writing as-is');
-      return result;
+      // Don't return yet - still need to copy dependencies
     }
   }
 
-  // Copy server dependencies to api folder if they exist
-  // Handle both root-level files AND backend/ folder structure
+  // Copy server dependencies to api folder
   const filesToCopy = ['app.js', 'routes', 'models', 'controllers', 'middleware', 'config'];
   const dirsToCheck = [workDir, path.join(workDir, 'backend')];
 
@@ -260,7 +314,6 @@ module.exports = async (req, res) => {
       const destPath = path.join(apiDir, file);
       if (fs.existsSync(srcPath)) {
         if (fs.statSync(srcPath).isDirectory()) {
-          // Copy directory recursively
           await fsp.mkdir(destPath, { recursive: true });
           const subFiles = await fsp.readdir(srcPath);
           for (const subFile of subFiles) {
@@ -279,27 +332,44 @@ module.exports = async (req, res) => {
     }
   }
 
-  // Also copy any JS files from backend/src to api/ for full server logic
+  // Copy backend/src to api/src (recursively for full backend code)
   const backendSrc = path.join(workDir, 'backend', 'src');
   if (fs.existsSync(backendSrc)) {
-    const apiSrcDir = path.join(apiDir, 'src');
-    await fsp.mkdir(apiSrcDir, { recursive: true });
-    const backendFiles = await fsp.readdir(backendSrc);
-    for (const bf of backendFiles) {
-      if (bf.endsWith('.js')) {
-        await fsp.copyFile(path.join(backendSrc, bf), path.join(apiSrcDir, bf));
-        console.log(`[Transform] Copied backend/src/${bf} to api/src/`);
+    const copyDirRecursive = async (src, dest) => {
+      await fsp.mkdir(dest, { recursive: true });
+      const entries = await fsp.readdir(src, { withFileTypes: true });
+      for (const entry of entries) {
+        const srcPath = path.join(src, entry.name);
+        const destPath = path.join(dest, entry.name);
+        if (entry.isDirectory()) {
+          await copyDirRecursive(srcPath, destPath);
+        } else if (entry.isFile()) {
+          await fsp.copyFile(srcPath, destPath);
+        }
       }
-    }
+    };
+    await copyDirRecursive(backendSrc, path.join(apiDir, 'src'));
+    console.log(`[Transform] Copied backend/src/ to api/src/`);
   }
 
-  // Copy package.json deps to api folder (for node_modules access)
+  // Verify app.js exists
+  const appJsPath = path.join(apiDir, 'src', 'app.js');
+  if (fs.existsSync(appJsPath)) {
+    console.log(`[Transform] Verified api/src/app.js exists`);
+  } else {
+    console.log(`[Transform] WARNING: api/src/app.js not found!`);
+  }
+
+  // Transform ALL JS files in api folder to CommonJS
+  await transformAllJsFiles(apiDir);
+  console.log('[Transform] Converted all JS files in api/ to CommonJS');
+
+  // Copy package.json deps
   const rootPkg = path.join(workDir, 'package.json');
   const apiPkg = path.join(apiDir, 'package.json');
   if (fs.existsSync(rootPkg)) {
     const pkgContent = await fsp.readFile(rootPkg, 'utf8');
     const pkg = JSON.parse(pkgContent);
-    // Create minimal package.json for api folder with only dependencies
     const apiPkgJson = {
       name: 'api',
       version: '1.0.0',
@@ -313,29 +383,20 @@ module.exports = async (req, res) => {
   return result;
 };
 
-// injectVercelJson removed - vercel.json is now generated inline in transformForDeployment
-
 const injectNowJson = async (workDir, projectType) => {
   const nowConfig = {
     version: 2,
     ...generateVercelConfig(projectType)
   };
   const nowJsonPath = path.join(workDir, 'now.json');
-
   await fsp.writeFile(nowJsonPath, JSON.stringify(nowConfig, null, 2));
-
-  return {
-    path: nowJsonPath,
-    config: nowConfig
-  };
+  return { path: nowJsonPath, config: nowConfig };
 };
 
 const injectPackageJsonType = async (workDir) => {
   const pkgPath = path.join(workDir, 'package.json');
   try {
     const pkg = JSON.parse(await fsp.readFile(pkgPath, 'utf8'));
-    // Remove "type": "module" to keep CommonJS for serverless
-    // Vercel serverless functions work better with CommonJS
     if (pkg.type === 'module') {
       delete pkg.type;
       await fsp.writeFile(pkgPath, JSON.stringify(pkg, null, 2));
@@ -353,10 +414,6 @@ exports.transformForDeployment = async (workDir, projectType, options = {}) => {
   console.log('[Transform] FUNCTION STARTED');
   console.log(`[Transform] workDir: ${workDir}`);
   console.log(`[Transform] projectType: "${projectType}"`);
-  console.log(`[Transform] typeof projectType: ${typeof projectType}`);
-  console.log(`[Transform] PROJECT_TYPES:`, PROJECT_TYPES);
-  console.log(`[Transform] PROJECT_TYPES.NODE_API: "${PROJECT_TYPES.NODE_API}"`);
-  console.log(`[Transform] projectType === PROJECT_TYPES.NODE_API: ${projectType === PROJECT_TYPES.NODE_API}`);
   console.log('===========================================');
 
   const results = {
@@ -366,63 +423,21 @@ exports.transformForDeployment = async (workDir, projectType, options = {}) => {
     transformations: []
   };
 
-  // Check for MERN stack (both backend and frontend directories)
-  // Store the original project type before any modifications
-  const originalProjectType = projectType;
-
   const mernResult = await detectMernStack(workDir);
   if (mernResult.isMern) {
     results.mernStructure = mernResult;
     console.log(`[Transform] MERN stack detected! Has frontend: ${mernResult.hasClient}, Has backend: ${mernResult.hasServer}`);
 
-    // Check if frontend folder has actual content (package.json, src, etc.)
     const frontendPath = path.join(workDir, mernResult.clientDir || 'frontend');
     const frontendPkgPath = path.join(frontendPath, 'package.json');
 
     if (fs.existsSync(frontendPkgPath)) {
       projectType = 'MERN';
       console.log(`[Transform] Switching to MERN config for full-stack deployment`);
-    } else {
-      console.log(`[Transform] Frontend folder empty, keeping as NODE_API`);
-      projectType = originalProjectType;
     }
   }
 
-  // Helper to flatten nested project structures (backend/, src/, etc.) to root
-  const flattenStructure = async () => {
-    const entries = await fsp.readdir(workDir, { withFileTypes: true });
-    const dirsToFlatten = entries.filter(e => e.isDirectory() &&
-      ['backend', 'src', 'server', 'app'].includes(e.name.toLowerCase()));
-
-    for (const dir of dirsToFlatten) {
-      const subDir = path.join(workDir, dir.name);
-      try {
-        const subEntries = await fsp.readdir(subDir, { withFileTypes: true });
-        for (const entry of subEntries) {
-          const srcPath = path.join(subDir, entry.name);
-          const destPath = path.join(workDir, entry.name);
-          if (!fs.existsSync(destPath)) {
-            if (entry.isDirectory()) {
-              await fsp.mkdir(destPath, { recursive: true });
-              const subFiles = await fsp.readdir(srcPath, { withFileTypes: true });
-              for (const file of subFiles) {
-                await fsp.copyFile(path.join(srcPath, file.name), path.join(destPath, file.name));
-              }
-            } else {
-              await fsp.copyFile(srcPath, destPath);
-            }
-          }
-        }
-        // Remove the flattened subdirectory
-        fs.rmSync(subDir, { recursive: true, force: true });
-      } catch {}
-    }
-  };
-
-  // Flatten nested structures like backend/, src/ to root level
-  await flattenStructure();
-
-  // 1. Find and potentially transform server file
+  // Find and transform server file
   let serverFileFound = false;
   if (projectType === PROJECT_TYPES.NODE_API || projectType === 'NODE_API' || projectType === 'MERN') {
     const serverFile = await findServerFile(workDir);
@@ -432,75 +447,30 @@ exports.transformForDeployment = async (workDir, projectType, options = {}) => {
       serverFileFound = true;
       console.log(`[Transform] Found server file: ${serverFile.path}`);
       const fileInfo = await checkApiPattern(serverFile.path);
-      console.log(`[Transform] API pattern check: hasModuleExports=${fileInfo.hasModuleExports}, hasListen=${fileInfo.hasListen}`);
 
       if (!fileInfo.hasModuleExports || fileInfo.hasListen) {
         const transformResult = await transformServerFile(workDir, {
           path: serverFile.path,
           content: fileInfo.content
         });
-
-        results.serverTransformed = {
-          found: true,
-          ...transformResult
-        };
-        results.transformations.push({
-          type: 'server_transform',
-          ...transformResult
-        });
+        results.serverTransformed = { found: true, ...transformResult };
+        results.transformations.push({ type: 'server_transform', ...transformResult });
       } else {
-        // Server file already has module.exports, just move to api folder
         const apiDir = await ensureApiFolder(workDir);
         const apiIndexPath = path.join(apiDir, 'index.js');
         await fsp.copyFile(serverFile.path, apiIndexPath);
-
-        results.serverTransformed = {
-          found: true,
-          moved: true,
-          files: [apiIndexPath]
-        };
-        results.transformations.push({
-          type: 'server_move',
-          from: serverFile.path,
-          to: apiIndexPath
-        });
+        results.serverTransformed = { found: true, moved: true, files: [apiIndexPath] };
+        results.transformations.push({ type: 'server_move', from: serverFile.path, to: apiIndexPath });
       }
     }
   }
 
-  // 2. Inject vercel.json - call AFTER server transformation so we know the correct project type
+  // Generate vercel.json
   console.log('----------- VERCEL.JSON GENERATION -----------');
   console.log(`[Transform] projectType at vercel.json: "${projectType}"`);
-  console.log(`[Transform] projectType === 'NODE_API': ${projectType === 'NODE_API'}`);
-  console.log(`[Transform] projectType === PROJECT_TYPES.NODE_API: ${projectType === PROJECT_TYPES.NODE_API}`);
 
-  // Always start fresh with proper config for NODE_API
   let vercelConfig;
-  if (projectType === PROJECT_TYPES.NODE_API || projectType === 'NODE_API') {
-    vercelConfig = {
-      version: 2,
-      builds: [{
-        src: 'api/**/*.js',
-        use: '@vercel/node'
-      }],
-      rewrites: [
-        { "source": "/(.*)", "destination": "/api/index.js" }
-      ],
-      headers: [
-        {
-          source: '/(.*)',
-          headers: [
-            { key: 'Access-Control-Allow-Origin', value: '*' },
-            { key: 'Access-Control-Allow-Methods', value: 'GET, POST, PUT, DELETE, OPTIONS' },
-            { key: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization' }
-          ]
-        }
-      ]
-    };
-    console.log(`[Transform] Created fresh vercelConfig for NODE_API:`, JSON.stringify(vercelConfig, null, 2));
-  } else if (projectType === 'MERN') {
-    // MERN stack - needs both Node.js API and static frontend build
-    // Check if frontend folder exists to determine correct paths
+  if (projectType === 'MERN') {
     const hasFrontendFolder = fs.existsSync(path.join(workDir, 'frontend')) ||
                              fs.existsSync(path.join(workDir, 'client'));
     const frontendDist = hasFrontendFolder ? 'frontend/dist' : 'dist';
@@ -508,16 +478,10 @@ exports.transformForDeployment = async (workDir, projectType, options = {}) => {
     vercelConfig = {
       version: 2,
       outputDirectory: frontendDist,
+      buildCommand: hasFrontendFolder ? "cd frontend && npm install && npm run build" : "npm install && npm run build",
       builds: [
-        {
-          src: 'api/**/*.js',
-          use: '@vercel/node'
-        },
-        {
-          src: 'package.json',
-          use: '@vercel/static-build',
-          config: { distDir: frontendDist }
-        }
+        { src: 'api/**/*.js', use: '@vercel/node' },
+        { src: 'package.json', use: '@vercel/static-build', config: { distDir: frontendDist } }
       ],
       routes: [
         { "src": "/api/(.*)", "dest": "/api/index.js" },
@@ -535,85 +499,38 @@ exports.transformForDeployment = async (workDir, projectType, options = {}) => {
         }
       ]
     };
-    console.log(`[Transform] Created fresh vercelConfig for MERN:`, JSON.stringify(vercelConfig, null, 2));
+    console.log(`[Transform] Created fresh vercelConfig for MERN`);
   } else {
     vercelConfig = generateVercelConfig(projectType, options);
   }
 
   const vercelJsonPath = path.join(workDir, 'vercel.json');
   await fsp.writeFile(vercelJsonPath, JSON.stringify(vercelConfig, null, 2));
-
-  // Immediately read it back to verify
-  const verification = await fsp.readFile(vercelJsonPath, 'utf8');
-  console.log(`[Transform] vercel.json verification (first 200 chars):`, verification.substring(0, 200));
-
   results.vercelJson = { path: vercelJsonPath, config: vercelConfig };
   results.files.push(vercelJsonPath);
-  results.transformations.push({
-    type: 'vercel_json',
-    path: vercelJsonPath
-  });
+  results.transformations.push({ type: 'vercel_json', path: vercelJsonPath });
 
-  // List directory contents to see what was created
-  const finalEntries = await fsp.readdir(workDir, { withFileTypes: true });
-  console.log(`[Transform] Final directory contents:`);
-  finalEntries.forEach(e => console.log(`  ${e.name}${e.isDirectory() ? '/' : ''}`));
-
-  // Check if api folder exists and has files
-  try {
-    const apiEntries = await fsp.readdir(path.join(workDir, 'api'), { withFileTypes: true });
-    console.log(`[Transform] api/ folder contents:`);
-    apiEntries.forEach(e => console.log(`    ${e.name}`));
-  } catch (e) {
-    console.log(`[Transform] api/ folder NOT FOUND!`);
-  }
-
-  // 3. Add "type": "module" to package.json for ESM support
+  // Remove "type": "module" from package.json
   const pkgResult = await injectPackageJsonType(workDir);
   if (pkgResult.updated) {
     results.files.push(pkgResult.path);
-    results.transformations.push({
-      type: 'package_json_esm',
-      path: pkgResult.path
-    });
+    results.transformations.push({ type: 'package_json_esm', path: pkgResult.path });
   }
 
-  // For MERN, add vercel-build script to root package.json
-  // and ensure backend dependencies are available
+  // For MERN, update root package.json
   if (projectType === 'MERN') {
     const pkgPath = path.join(workDir, 'package.json');
     try {
       const pkg = JSON.parse(await fsp.readFile(pkgPath, 'utf8'));
       pkg.scripts = pkg.scripts || {};
 
-      // Check if frontend/ folder exists
-      const frontendDir = path.join(workDir, 'frontend');
-      const clientDir = path.join(workDir, 'client');
-      const hasFrontendFolder = fs.existsSync(frontendDir) || fs.existsSync(clientDir);
+      const hasFrontendFolder = fs.existsSync(path.join(workDir, 'frontend')) ||
+                                 fs.existsSync(path.join(workDir, 'client'));
 
       if (hasFrontendFolder) {
         pkg.scripts['vercel-build'] = 'cd frontend && npm install && npm run build && cd ..';
       } else {
-        // Frontend is at root level (Vite default - builds to dist/)
         pkg.scripts['vercel-build'] = 'npm install && npm run build';
-      }
-
-      // Ensure backend dependencies are installed for serverless
-      // Copy backend/package.json to api/package.json
-      const backendPkgPath = path.join(workDir, 'backend', 'package.json');
-      if (fs.existsSync(backendPkgPath)) {
-        const backendPkg = JSON.parse(await fsp.readFile(backendPkgPath, 'utf8'));
-        const apiPkgPath = path.join(workDir, 'api', 'package.json');
-        const apiPkg = {
-          name: 'api',
-          version: '1.0.0',
-          dependencies: {
-            ...(backendPkg.dependencies || {}),
-            ...(pkg.dependencies || {})
-          }
-        };
-        await fsp.writeFile(apiPkgPath, JSON.stringify(apiPkg, null, 2));
-        console.log('[Transform] Created api/package.json with backend deps');
       }
 
       await fsp.writeFile(pkgPath, JSON.stringify(pkg, null, 2));
@@ -623,23 +540,10 @@ exports.transformForDeployment = async (workDir, projectType, options = {}) => {
     }
   }
 
-  // 4. Optionally inject now.json for backward compatibility
-  if (options.includeNowJson) {
-    const nowResult = await injectNowJson(workDir, projectType);
-    results.nowJson = nowResult;
-    results.files.push(nowResult.path);
-    results.transformations.push({
-      type: 'now_json',
-      path: nowResult.path
-    });
-  }
-
   console.log(`[Transform] Completed ${results.transformations.length} transformations`);
-
   return results;
 };
 
-// MERN Stack Detection & Transformation
 const detectMernStack = async (workDir) => {
   const entries = await fsp.readdir(workDir, { withFileTypes: true });
   const directories = entries.filter(e => e.isDirectory()).map(e => e.name.toLowerCase());
@@ -647,7 +551,6 @@ const detectMernStack = async (workDir) => {
   const hasServer = directories.some(d => ['server', 'backend', 'api', 'app'].includes(d));
   const hasClient = directories.some(d => ['client', 'frontend', 'app', 'web', 'ui'].includes(d));
 
-  // Check root package.json for "concurrently" or both backend+frontend deps
   let rootPkg = null;
   try {
     const rootPkgContent = await fsp.readFile(path.join(workDir, 'package.json'), 'utf8');
@@ -667,64 +570,6 @@ const detectMernStack = async (workDir) => {
     serverDir: directories.find(d => ['server', 'backend', 'api'].includes(d)),
     clientDir: directories.find(d => ['client', 'frontend', 'app', 'web', 'ui'].includes(d))
   };
-};
-
-const transformMernProject = async (workDir, mernInfo) => {
-  const results = {
-    serverConfig: null,
-    clientConfig: null,
-    vercelJson: null,
-    files: []
-  };
-
-  // Transform server (move to /api if needed)
-  if (mernInfo.serverDir) {
-    const serverPath = path.join(workDir, mernInfo.serverDir);
-    const serverFile = await findServerFile(serverPath);
-
-    if (serverFile) {
-      // Ensure server ends with module.exports
-      const content = await fsp.readFile(serverFile.path, 'utf8');
-      if (content.includes('app.listen')) {
-        const transformed = content.replace(/app\.listen\s*\(\s*(\d+|\w+)/g, '// Vercel serverless\nmodule.exports = app; // Removed: app.listen($1');
-        await fsp.writeFile(serverFile.path, transformed);
-        results.serverConfig = { transformed: true, path: serverFile.path };
-      }
-    }
-  }
-
-  // Generate vercel.json for MERN
-  const hasFrontendFolder = fs.existsSync(path.join(workDir, 'frontend')) ||
-                            fs.existsSync(path.join(workDir, 'client'));
-  const frontendDist = hasFrontendFolder ? 'frontend/dist' : 'dist';
-
-  const vercelConfig = {
-    version: 2,
-    outputDirectory: frontendDist,
-    builds: [
-      {
-        src: 'api/**/*.js',
-        use: '@vercel/node'
-      },
-      {
-        src: 'package.json',
-        use: '@vercel/static-build',
-        config: { distDir: frontendDist }
-      }
-    ],
-    routes: [
-      { "src": "/api/(.*)", "dest": "/api/index.js" },
-      { "handle": "filesystem" },
-      { "src": "/(.*)", "dest": "/index.html" }
-    ]
-  };
-
-  const vercelJsonPath = path.join(workDir, 'vercel.json');
-  await fsp.writeFile(vercelJsonPath, JSON.stringify(vercelConfig, null, 2));
-  results.vercelJson = vercelConfig;
-  results.files.push(vercelJsonPath);
-
-  return results;
 };
 
 exports.generateVercelConfig = generateVercelConfig;

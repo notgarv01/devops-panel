@@ -109,18 +109,27 @@ class AIService {
     }
 
     try {
-      const logText = this.formatLogs(buildLogs);
+      // Filter to only error-related lines to reduce payload size
+      const logLines = (buildLogs || []).map(log => log.message || '').filter(Boolean);
+      const errorLines = logLines.filter(line =>
+        /error|failed|exception|invalid|missing|warn|err/i.test(line)
+      );
+
+      // Use only last 20 relevant lines, or last 10 if no errors found
+      const trimmedLines = errorLines.length > 0
+        ? errorLines.slice(-20)
+        : logLines.slice(-10);
+
+      const logText = trimmedLines.map(line => line.substring(0, 200)).join('\n');
+
+      // Add delay to prevent burst rate limiting
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
       const systemPrompt = `You are a DevOps engineer specializing in debugging build failures.
 When given Vercel build logs, identify the root cause and provide a clear, actionable fix.
 Keep responses concise (2-3 sentences max).`;
 
-      const userPrompt = `Analyze these Vercel build logs and identify the issue:
-
-${logText}
-
-If there's an error, explain what went wrong and what the user should do to fix it.
-If there's no clear error, say "No obvious issue found in the logs."`;
+      const userPrompt = `Vercel build failed. Diagnose the issue:\n${logText}`;
 
       let response;
       if (this.useGemini) {
@@ -187,14 +196,16 @@ If there's no clear error, say "No obvious issue found in the logs."`;
       return 'No logs provided';
     }
 
-    // Take last 50 lines of logs (most relevant for failures) to avoid token limits
-    const recentLogs = logs.slice(-50);
-    return recentLogs.map(log => {
-      const timestamp = log.timestamp ? new Date(log.timestamp).toISOString() : '';
-      const level = log.level || 'info';
-      const message = (log.message || '').substring(0, 500); // Truncate long lines
-      return `[${level}] ${message}`;
-    }).join('\n');
+    // Sanitize: remove non-printable characters that cause 400 errors
+    const sanitized = logs.map(log => {
+      const message = (log.message || '').substring(0, 200);
+      // Keep only printable ASCII characters
+      return message.replace(/[^\x20-\x7E\n]/g, '');
+    }).filter(msg => msg.trim());
+
+    // Take last 20 lines to avoid rate limits
+    const recentLogs = sanitized.slice(-20);
+    return recentLogs.map(log => `[info] ${log}`).join('\n');
   }
 }
 

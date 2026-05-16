@@ -141,101 +141,110 @@ const isGitHubUrl = (str) => {
 // ===== STEP 3: DEEP TRANSMUTATION (Source Code Fixer) =====
 const transmuteSourceCode = async (workDir, logs, options = {}) => {
   const { projectType, envVars = [] } = options;
-  const isViteProject = projectType === PROJECT_TYPES.FRONTEND_FRAMEWORK;
-
-  // Use Vite syntax for frontend frameworks, Node syntax for backend
-  const envPrefix = isViteProject ? 'import.meta.env.VITE_' : 'process.env.VITE_';
-  const envVarRef = isViteProject ? 'import.meta.env.VITE_API_URL' : 'process.env.VITE_API_URL';
 
   const results = {
     filesModified: 0,
     fixes: []
   };
 
+  // Check if file is in frontend directory (normalize path for cross-platform)
+  const isFrontendFile = (filePath) => {
+    const normalizedPath = filePath.replace(/\\/g, '/');
+    return /frontend/.test(normalizedPath) || /client/.test(normalizedPath) ||
+           /\/src\/components\//.test(normalizedPath) || /\/src\/pages\//.test(normalizedPath) ||
+           /\/src\/hooks\//.test(normalizedPath) || /\.jsx?$/.test(normalizedPath);
+  };
+
   const transmutationRules = [
     // Pattern 0: Fix ${import.meta.env.VITE_API_URL} in template literals
     {
       pattern: /\$\{import\.meta\.env\.VITE_API_URL\}/g,
-      replace: (match) => {
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `""` });
-        return `""`;
+      replace: (match, filePath) => {
+        const useVite = isFrontendFile(filePath);
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `"\${${useVite ? 'import.meta.env.VITE_API_URL' : 'process.env.VITE_API_URL'} || ''}"` });
+        return `"\${${useVite ? 'import.meta.env.VITE_API_URL' : 'process.env.VITE_API_URL'} || ''}"`;
       }
     },
     // Pattern 1: Fix ${process.env.VITE_API_URL} in template literals
     {
       pattern: /\$\{process\.env\.VITE_API_URL\}/g,
-      replace: (match) => {
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `""` });
-        return `""`;
+      replace: (match, filePath) => {
+        const useVite = isFrontendFile(filePath);
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `"\${${useVite ? 'import.meta.env.VITE_API_URL' : 'process.env.VITE_API_URL'} || ''}"` });
+        return `"\${${useVite ? 'import.meta.env.VITE_API_URL' : 'process.env.VITE_API_URL'} || ''}"`;
       }
     },
     // Pattern 2: Fix "undefined0" literal strings
     {
       pattern: /['"]undefined0['"]/g,
       replace: (match) => {
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `""` });
-        return `""`;
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `"''"` });
+        return `"''"`;
       }
     },
     // Pattern 3: Fix import.meta.env.VITE_API_URL + "/api" concatenations
     {
       pattern: /import\.meta\.env\.VITE_API_URL\s*\+\s*['"]([^'"]*)['"]/g,
-      replace: (match, path) => {
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `"" + "${path}"` });
-        return `"" + "${path}"`;
+      replace: (match, apiPath) => {
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `(import.meta.env.VITE_API_URL || '') + "/${apiPath}"` });
+        return `(import.meta.env.VITE_API_URL || '') + "/${apiPath}"`;
       }
     },
     // Pattern 4: Same for process.env
     {
       pattern: /process\.env\.VITE_API_URL\s*\+\s*['"]([^'"]*)['"]/g,
-      replace: (match, path) => {
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `"" + "${path}"` });
-        return `"" + "${path}"`;
+      replace: (match, apiPath) => {
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `(process.env.VITE_API_URL || '') + "/${apiPath}"` });
+        return `(process.env.VITE_API_URL || '') + "/${apiPath}"`;
       }
     },
     // Pattern 5: Fix bare import.meta.env.VITE_API_URL
     {
       pattern: /import\.meta\.env\.VITE_API_URL(?![\s\+])/g,
       replace: (match) => {
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `""` });
-        return `""`;
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `(import.meta.env.VITE_API_URL || '')` });
+        return `(import.meta.env.VITE_API_URL || '')`;
       }
     },
     // Pattern 6: Same for process.env
     {
       pattern: /process\.env\.VITE_API_URL(?![\s\+])/g,
       replace: (match) => {
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `""` });
-        return `""`;
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `(process.env.VITE_API_URL || '')` });
+        return `(process.env.VITE_API_URL || '')`;
       }
     },
-    // Pattern 7: Fix localhost URLs - for API configs, use empty string (Vercel rewrites handle routing)
-    // "http://localhost:3000" -> ""
-    // "http://localhost:5173/api" -> "" (let Vercel proxy /api/*)
+    // Pattern 7: Fix localhost URLs - CRITICAL: use correct Vite/Node syntax per port AND file location
+    // Port 3000 is always backend (Node), ports 5173/5174 are frontend (Vite)
     {
-      pattern: /['"]https?:\/\/localhost:\d+(\/[^'"]*)?['"]/g,
-      replace: (match) => {
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `""` });
-        return `""`;
+      pattern: /['"]https?:\/\/localhost:(\d+)(\/[^'"]*)?['"]/g,
+      replace: (match, port, path) => {
+        const useVite = isFrontendFile(filePath) && port !== '3000';
+        const varRef = useVite ? 'import.meta.env.VITE_API_URL' : 'process.env.API_URL';
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `(${varRef} || '')` });
+        return `(${varRef} || '')`;
       }
     },
-    // Pattern 8: Fix fetch('http://localhost:3000/api') -> fetch('/api')
+    // Pattern 8: Fix fetch('http://localhost:3000/api') - detect port for correct syntax
     {
-      pattern: /fetch\s*\(\s*['"]https?:\/\/localhost:\d+(\/[^'"]*)?['"]\s*\)/gi,
-      replace: (match) => {
-        const pathMatch = match.match(/:\d+(\/.+)?['"]\s*\)/);
-        let path = pathMatch && pathMatch[1] ? pathMatch[1] : '/';
-        if (!path.startsWith('/')) path = '/' + path;
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `fetch("${path}")` });
-        return `fetch("${path}")`;
+      pattern: /fetch\s*\(\s*['"]https?:\/\/localhost:(\d+)(\/[^'"]*)?['"]\s*\)/gi,
+      replace: (match, port, path) => {
+        let apiPath = path || '/';
+        if (!apiPath.startsWith('/')) apiPath = '/' + apiPath;
+        const useVite = isFrontendFile(filePath) && port !== '3000';
+        const varRef = useVite ? 'import.meta.env.VITE_API_URL' : 'process.env.API_URL';
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `fetch((${varRef} || '') + "${apiPath}")` });
+        return `fetch((${varRef} || '') + "${apiPath}")`;
       }
     },
-    // Pattern 9: Fix baseURL: 'http://localhost:3000' -> baseURL: ''
+    // Pattern 9: Fix baseURL: 'http://localhost:3000' - port-based detection
     {
-      pattern: /baseURL:\s*['"]https?:\/\/localhost:\d+(\/[^'"]*)?['"]/gi,
-      replace: (match) => {
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `baseURL: ""` });
-        return `baseURL: ""`;
+      pattern: /baseURL:\s*['"]https?:\/\/localhost:(\d+)(\/[^'"]*)?['"]/gi,
+      replace: (match, port) => {
+        const useVite = isFrontendFile(filePath) && port !== '3000';
+        const varRef = useVite ? 'import.meta.env.VITE_API_URL' : 'process.env.API_URL';
+        results.fixes.push({ file: 'pattern-replace', find: match, replace: `baseURL: (${varRef} || '')` });
+        return `baseURL: (${varRef} || '')`;
       }
     }
   ];
@@ -294,7 +303,8 @@ const transmuteSourceCode = async (workDir, logs, options = {}) => {
 
         for (const rule of transmutationRules) {
           if (rule.replace) {
-            const newContent = content.replace(rule.pattern, rule.replace);
+            // Pass filePath to replace function so it can determine Vite vs Node syntax
+            const newContent = content.replace(rule.pattern, (match) => rule.replace(match, filePath));
             if (newContent !== content) {
               content = newContent;
               thisPassModified = true;
@@ -546,11 +556,9 @@ const runTransformationPipeline = async (io, sessionId, config) => {
 
       logs.emit('info', `Git add...`);
       await git.add('.');
-
-      if (fs.existsSync(vercelJsonPath)) {
-        await git.add('vercel.json');
-        logs.emit('info', `Staged vercel.json`);
-      }
+      await git.add('api');  // Add api folder explicitly
+      await git.add('vercel.json');
+      logs.emit('info', `Staged vercel.json and api/`);
 
       logs.emit('info', `Git commit...`);
       await git.commit('Deploy via DevOps Panel - Transmuted for Vercel');
