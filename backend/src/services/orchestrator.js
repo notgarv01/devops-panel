@@ -10,6 +10,11 @@ const { createVercelService } = require('./vercel.service');
 const Project = require('../models/Project');
 const { createAIService, parseBuildError } = require('./ai.service');
 const { SecretSentinel } = require('./secretSentinel');
+const { architectAudit } = require('./architect');
+const { refactorMovedFiles } = require('./refactor.service');
+const { createAIRefactorService } = require('./aiRefactor');
+const { executeMigration, cleanupEmptyDirs, verifyMigration } = require('../utils/repoManager');
+const { splitPackageJson } = require('../utils/packageManager');
 
 // Project persistence helper - ensures project exists and updates status
 const updateProjectStatus = async (projectName, updates) => {
@@ -100,6 +105,243 @@ class LogStreamer {
   }
 }
 
+// ===== PHASE 1: REPOSITORY AUDITOR =====
+// Deep crawl of the repo to map every path and configuration
+async function deepAuditRepository(workDir) {
+  const audit = {
+    frontend: { path: '', buildScript: '', outDir: 'dist', framework: '' },
+    backend: { path: '', entryFile: '', framework: '' },
+    isMERN: false,
+    allPackages: []
+  };
+
+  try {
+    // Helper to check if file exists
+    const fileExists = async (filePath) => {
+      try {
+        await fs.promises.access(filePath);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    // Recursively find all package.json files
+    const findFiles = async (dir, pattern) => {
+      const results = [];
+      try {
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            if (!['node_modules', '.git', 'dist', 'build', '.next', '.nuxt'].includes(entry.name)) {
+              results.push(...await findFiles(fullPath, pattern));
+            }
+          } else if (entry.name.match(pattern)) {
+            results.push(fullPath);
+          }
+        }
+      } catch {}
+      return results;
+    };
+
+    // Find all package.json files
+    const packages = await findFiles(workDir, /package\.json$/);
+    console.log(`[Audit] Found ${packages.length} package.json files`);
+
+    for (const pkgPath of packages) {
+      try {
+        const content = await fs.promises.readFile(pkgPath, 'utf8');
+        const pkg = JSON.parse(content);
+        const dir = path.dirname(pkgPath);
+        const relativeDir = path.relative(workDir, dir);
+        const relativeDirForAudit = relativeDir === '' ? '.' : relativeDir;
+
+        audit.allPackages.push({
+          path: pkgPath,
+          name: pkg.name || path.basename(dir),
+          dir: relativeDirForAudit
+        });
+
+        // Identify Frontend (looking for Vite/React/Vue)
+        const hasVite = pkg.dependencies?.vite || pkg.devDependencies?.vite;
+        const hasReact = pkg.dependencies?.react;
+        const hasVue = pkg.dependencies?.vue;
+        const hasNext = pkg.dependencies?.next;
+
+        if (hasVite || hasReact || hasVue) {
+          audit.frontend.path = relativeDirForAudit === '.' ? 'frontend' : relativeDirForAudit;
+          audit.frontend.buildScript = pkg.scripts?.build || (hasVite ? 'vite build' : 'npm run build');
+          audit.frontend.framework = hasVite ? 'Vite' : (hasReact ? 'React' : 'Vue');
+
+          // Detect output directory from vite.config.js
+          const viteConfigPath = path.join(dir, 'vite.config.js');
+          if (await fileExists(viteConfigPath)) {
+            const viteConfig = await fs.promises.readFile(viteConfigPath, 'utf8');
+            const outDirMatch = viteConfig.match(/outDir:\s*['"]([^'"]+)['"]/);
+            if (outDirMatch) {
+              audit.frontend.outDir = outDirMatch[1];
+            }
+            // Check for base path
+            const baseMatch = viteConfig.match(/base:\s*['"]([^'"]+)['"]/);
+            if (baseMatch) {
+              audit.frontend.base = baseMatch[1];
+            }
+          }
+
+          console.log(`[Audit] Frontend: ${audit.frontend.path}, framework: ${audit.frontend.framework}`);
+        }
+
+        // Identify Backend (looking for Express/Mongoose)
+        const hasExpress = pkg.dependencies?.express;
+        const hasMongoose = pkg.dependencies?.mongoose;
+        const hasFastify = pkg.dependencies?.fastify;
+
+        if (hasExpress || hasMongoose) {
+          audit.backend.path = relativeDirForAudit === '.' ? 'backend' : relativeDirForAudit;
+          audit.backend.framework = hasExpress ? 'Express' : (hasMongoose ? 'Mongoose' : 'Node');
+
+          // Find the entry file (server.js, app.js, index.js)
+          const possibleEntries = ['server.js', 'src/app.js', 'index.js', 'app.js', 'src/index.js'];
+          for (const entry of possibleEntries) {
+            const entryPath = path.join(workDir, audit.backend.path, entry);
+            if (await fileExists(entryPath)) {
+              audit.backend.entryFile = path.join(audit.backend.path, entry);
+              break;
+            }
+          }
+
+          console.log(`[Audit] Backend: ${audit.backend.path}, entry: ${audit.backend.entryFile}`);
+        }
+      } catch (e) {
+        console.log(`[Audit] Skipping invalid package.json: ${pkgPath}`);
+      }
+    }
+
+    // Determine if MERN
+    audit.isMERN = !!(audit.frontend.path && audit.backend.path);
+
+    console.log(`[Audit] === REPOSITORY MAP ===`);
+    console.log(`  Frontend: ${audit.frontend.path || 'NOT FOUND'}`);
+    console.log(`  Backend: ${audit.backend.path || 'NOT FOUND'}`);
+    console.log(`  isMERN: ${audit.isMERN}`);
+    console.log(`  Build: ${audit.frontend.buildScript}`);
+    console.log(`  Output: ${audit.frontend.outDir}`);
+
+  } catch (error) {
+    console.error('[Audit] Error:', error.message);
+  }
+
+  return audit;
+}
+
+// Alias for backward compatibility
+const analyzeRepository = deepAuditRepository;
+
+// ===== PHASE 2: AI-DRIVEN CORRECTION =====
+async function performAICorrection(workDir, discovery, logs) {
+  const corrections = {
+    viteBaseFixed: false,
+    apiUrlsFixed: 0,
+    errors: []
+  };
+
+  try {
+    logs.emit('info', `Phase 2: Running AI-driven corrections...`);
+
+    // Use audit structure from deepAuditRepository
+    const frontendPath = discovery.frontend?.path || discovery.frontendPath || '';
+    const backendPath = discovery.backend?.path || discovery.backendPath || '';
+
+    // 1. Fix vite.config.js base path
+    if (frontendPath) {
+      const viteConfigPath = path.join(workDir, frontendPath, 'vite.config.js');
+      if (fs.existsSync(viteConfigPath)) {
+        let viteConfig = await fs.promises.readFile(viteConfigPath, 'utf8');
+        const hasCustomBase = viteConfig.includes('base:');
+
+        if (hasCustomBase) {
+          // Replace any existing base with base: '/'
+          viteConfig = viteConfig.replace(/base:\s*['"][^'"]*['"]/g, "base: '/'");
+          await fs.promises.writeFile(viteConfigPath, viteConfig);
+          corrections.viteBaseFixed = true;
+          logs.emit('info', `Fixed vite.config.js base path to '/'`);
+        } else {
+          logs.emit('info', `vite.config.js already has correct base '/'`);
+        }
+      }
+    }
+
+    // 2. Fix API URLs (localhost -> environment variables)
+    const fixApiUrls = async (dir, isFrontend) => {
+      const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      let fixed = 0;
+
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+
+        if (entry.isDirectory()) {
+          if (!['node_modules', '.git', 'dist', 'build'].includes(entry.name)) {
+            fixed += await fixApiUrls(fullPath, isFrontend);
+          }
+        } else if (entry.name.match(/\.(js|jsx|ts|tsx)$/)) {
+          let content = await fs.promises.readFile(fullPath, 'utf8');
+          let originalContent = content;
+
+          // Replace localhost URLs with environment variables
+          content = content.replace(/['"]http:\/\/localhost:(\d+)[^'"]*['"]/g, (match, port) => {
+            if (port === '3000') {
+              return "'process.env.API_URL'";
+            }
+            return isFrontend ? "import.meta.env.VITE_API_URL" : "process.env.API_URL";
+          });
+
+          if (content !== originalContent) {
+            await fs.promises.writeFile(fullPath, content);
+            fixed++;
+          }
+        }
+      }
+      return fixed;
+    };
+
+    // Fix frontend URLs
+    if (frontendPath) {
+      const frontendDir = path.join(workDir, frontendPath);
+      if (fs.existsSync(frontendDir)) {
+        corrections.apiUrlsFixed += await fixApiUrls(frontendDir, true);
+      }
+    }
+
+    // Fix backend URLs
+    if (backendPath) {
+      const backendDir = path.join(workDir, backendPath);
+      if (fs.existsSync(backendDir)) {
+        corrections.apiUrlsFixed += await fixApiUrls(backendDir, false);
+      }
+    }
+
+    logs.emit('info', `API URLs corrected: ${corrections.apiUrlsFixed} files`);
+
+    // 3. Verify index.html exists in frontend root
+    if (frontendPath) {
+      const indexHtmlPath = path.join(workDir, frontendPath, 'index.html');
+      if (fs.existsSync(indexHtmlPath)) {
+        logs.emit('info', `index.html verified at ${frontendPath}/`);
+      } else {
+        corrections.errors.push('index.html not found in frontend root');
+        logs.emit('warning', `index.html NOT found in ${frontendPath}/`);
+      }
+    }
+
+  } catch (error) {
+    console.error('[AI Correction] Error:', error.message);
+    corrections.errors.push(error.message);
+  }
+
+  return corrections;
+}
+
 // Clone GitHub repo to temp directory
 const cloneRepo = async (repoUrl, targetDir, preferredBranch = null) => {
   if (fs.existsSync(targetDir)) {
@@ -138,200 +380,52 @@ const isGitHubUrl = (str) => {
   return str && (str.includes('github.com') || str.startsWith('https://'));
 };
 
-// ===== STEP 3: DEEP TRANSMUTATION (Source Code Fixer) =====
-const transmuteSourceCode = async (workDir, logs, options = {}) => {
-  const { projectType, envVars = [] } = options;
-
-  const results = {
-    filesModified: 0,
-    fixes: []
+// ===== STEP 3: TRANSMUTATION (Source Code Fixer) =====
+async function transmuteSourceCode(projectPath, discovery = {}) {
+  const getFiles = async (dir) => {
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    const files = await Promise.all(entries.map((res) => {
+      const fullPath = path.resolve(dir, res.name);
+      return res.isDirectory() ? getFiles(fullPath) : fullPath;
+    }));
+    return Array.prototype.concat(...files).filter(f => f.match(/\.(js|jsx|ts|tsx)$/));
   };
 
-  // Check if file is in frontend directory (normalize path for cross-platform)
-  const isFrontendFile = (filePath) => {
-    const normalizedPath = filePath.replace(/\\/g, '/');
-    return /frontend/.test(normalizedPath) || /client/.test(normalizedPath) ||
-           /\/src\/components\//.test(normalizedPath) || /\/src\/pages\//.test(normalizedPath) ||
-           /\/src\/hooks\//.test(normalizedPath) || /\.jsx?$/.test(normalizedPath);
-  };
+  const files = await getFiles(projectPath);
+  let totalModified = 0;
 
-  const transmutationRules = [
-    // Pattern 0: Fix ${import.meta.env.VITE_API_URL} in template literals
-    {
-      pattern: /\$\{import\.meta\.env\.VITE_API_URL\}/g,
-      replace: (match, filePath) => {
-        const useVite = isFrontendFile(filePath);
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `"\${${useVite ? 'import.meta.env.VITE_API_URL' : 'process.env.VITE_API_URL'} || ''}"` });
-        return `"\${${useVite ? 'import.meta.env.VITE_API_URL' : 'process.env.VITE_API_URL'} || ''}"`;
+  // Use audit structure from deepAuditRepository
+  const frontendDir = discovery.frontend?.path || discovery.frontendPath || 'frontend';
+  const backendDir = discovery.backend?.path || discovery.backendPath || 'backend';
+
+  for (const file of files) {
+    let content = await fs.promises.readFile(file, 'utf8');
+    const originalContent = content;
+
+    // Check if this file is in the frontend or backend directory
+    const normalizedPath = file.replace(/\\/g, '/');
+    const isFrontend = normalizedPath.includes(`/${frontendDir}/`) || normalizedPath.endsWith(`/${frontendDir}`);
+    const isBackend = normalizedPath.includes(`/${backendDir}/`) || normalizedPath.endsWith(`/${backendDir}`);
+
+    // Replace localhost URLs with appropriate environment variables
+    content = content.replace(/['"]http:\/\/localhost:(\d+)[^'"]*['"]/g, (match, port) => {
+      if (port === '3000') {
+        return "'process.env.API_URL'";
       }
-    },
-    // Pattern 1: Fix ${process.env.VITE_API_URL} in template literals
-    {
-      pattern: /\$\{process\.env\.VITE_API_URL\}/g,
-      replace: (match, filePath) => {
-        const useVite = isFrontendFile(filePath);
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `"\${${useVite ? 'import.meta.env.VITE_API_URL' : 'process.env.VITE_API_URL'} || ''}"` });
-        return `"\${${useVite ? 'import.meta.env.VITE_API_URL' : 'process.env.VITE_API_URL'} || ''}"`;
-      }
-    },
-    // Pattern 2: Fix "undefined0" literal strings
-    {
-      pattern: /['"]undefined0['"]/g,
-      replace: (match) => {
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `"''"` });
-        return `"''"`;
-      }
-    },
-    // Pattern 3: Fix import.meta.env.VITE_API_URL + "/api" concatenations
-    {
-      pattern: /import\.meta\.env\.VITE_API_URL\s*\+\s*['"]([^'"]*)['"]/g,
-      replace: (match, apiPath) => {
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `(import.meta.env.VITE_API_URL || '') + "/${apiPath}"` });
-        return `(import.meta.env.VITE_API_URL || '') + "/${apiPath}"`;
-      }
-    },
-    // Pattern 4: Same for process.env
-    {
-      pattern: /process\.env\.VITE_API_URL\s*\+\s*['"]([^'"]*)['"]/g,
-      replace: (match, apiPath) => {
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `(process.env.VITE_API_URL || '') + "/${apiPath}"` });
-        return `(process.env.VITE_API_URL || '') + "/${apiPath}"`;
-      }
-    },
-    // Pattern 5: Fix bare import.meta.env.VITE_API_URL
-    {
-      pattern: /import\.meta\.env\.VITE_API_URL(?![\s\+])/g,
-      replace: (match) => {
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `(import.meta.env.VITE_API_URL || '')` });
-        return `(import.meta.env.VITE_API_URL || '')`;
-      }
-    },
-    // Pattern 6: Same for process.env
-    {
-      pattern: /process\.env\.VITE_API_URL(?![\s\+])/g,
-      replace: (match) => {
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `(process.env.VITE_API_URL || '')` });
-        return `(process.env.VITE_API_URL || '')`;
-      }
-    },
-    // Pattern 7: Fix localhost URLs - CRITICAL: use correct Vite/Node syntax per port AND file location
-    // Port 3000 is always backend (Node), ports 5173/5174 are frontend (Vite)
-    {
-      pattern: /['"]https?:\/\/localhost:(\d+)(\/[^'"]*)?['"]/g,
-      replace: (match, port, path) => {
-        const useVite = isFrontendFile(filePath) && port !== '3000';
-        const varRef = useVite ? 'import.meta.env.VITE_API_URL' : 'process.env.API_URL';
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `(${varRef} || '')` });
-        return `(${varRef} || '')`;
-      }
-    },
-    // Pattern 8: Fix fetch('http://localhost:3000/api') - detect port for correct syntax
-    {
-      pattern: /fetch\s*\(\s*['"]https?:\/\/localhost:(\d+)(\/[^'"]*)?['"]\s*\)/gi,
-      replace: (match, port, path) => {
-        let apiPath = path || '/';
-        if (!apiPath.startsWith('/')) apiPath = '/' + apiPath;
-        const useVite = isFrontendFile(filePath) && port !== '3000';
-        const varRef = useVite ? 'import.meta.env.VITE_API_URL' : 'process.env.API_URL';
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `fetch((${varRef} || '') + "${apiPath}")` });
-        return `fetch((${varRef} || '') + "${apiPath}")`;
-      }
-    },
-    // Pattern 9: Fix baseURL: 'http://localhost:3000' - port-based detection
-    {
-      pattern: /baseURL:\s*['"]https?:\/\/localhost:(\d+)(\/[^'"]*)?['"]/gi,
-      replace: (match, port) => {
-        const useVite = isFrontendFile(filePath) && port !== '3000';
-        const varRef = useVite ? 'import.meta.env.VITE_API_URL' : 'process.env.API_URL';
-        results.fixes.push({ file: 'pattern-replace', find: match, replace: `baseURL: (${varRef} || '')` });
-        return `baseURL: (${varRef} || '')`;
-      }
+      // Use VITE_ prefix for frontend, NODE_ for backend
+      return isFrontend ? 'import.meta.env.VITE_API_URL' : 'process.env.API_URL';
+    });
+
+    if (content !== originalContent) {
+      await fs.promises.writeFile(file, content);
+      const syntax = isFrontend ? 'VITE' : 'NODE';
+      console.log(`[Transmute] ${syntax} syntax applied to: ${path.basename(file)}`);
+      totalModified++;
     }
-  ];
+  }
 
-  const sourceExtensions = ['.js', '.jsx', '.ts', '.tsx', '.vue', '.svelte'];
-
-  const scanDir = async (dir, depth = 0) => {
-    if (depth > 8) return; // Increased depth for nested MERN structures
-
-    try {
-      const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-
-        // Skip these directories
-        if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' ||
-            entry.name === 'build' || entry.name === '.next' || entry.name === '.nuxt' ||
-            entry.name === '__pycache__' || entry.name === '.cache' || entry.name === 'coverage') {
-          continue;
-        }
-
-        if (entry.isDirectory()) {
-          // Scan ALL directories recursively (including frontend/, backend/, src/, etc.)
-          await scanDir(fullPath, depth + 1);
-        } else if (entry.isFile()) {
-          const ext = path.extname(entry.name).toLowerCase();
-          if (!sourceExtensions.includes(ext)) continue;
-
-          await processFile(fullPath);
-        }
-      }
-    } catch (err) {
-      console.log(`[Transmute] Cannot scan ${dir}: ${err.message}`);
-    }
-  };
-
-  const processFile = async (filePath) => {
-    try {
-      let content = await fs.promises.readFile(filePath, 'utf8');
-      let modified = false;
-      const originalContent = content;
-
-      // Check if file contains any patterns we're looking for (optimization)
-      const hasTargetPatterns = /localhost|import\.meta\.env\.VITE_API_URL|process\.env\.VITE_API_URL|undefined/.test(content);
-      if (!hasTargetPatterns) {
-        return; // Skip files that don't contain target patterns
-      }
-
-      // Run multiple passes to handle chained transformations
-      let passCount = 0;
-      const maxPasses = 3;
-
-      while (passCount < maxPasses) {
-        let thisPassModified = false;
-
-        for (const rule of transmutationRules) {
-          if (rule.replace) {
-            // Pass filePath to replace function so it can determine Vite vs Node syntax
-            const newContent = content.replace(rule.pattern, (match) => rule.replace(match, filePath));
-            if (newContent !== content) {
-              content = newContent;
-              thisPassModified = true;
-              modified = true;
-            }
-          }
-        }
-
-        // If no changes in this pass, stop iterating
-        if (!thisPassModified) break;
-        passCount++;
-      }
-
-      if (modified) {
-        await fs.promises.writeFile(filePath, content, 'utf8');
-        results.filesModified++;
-        console.log(`[Transmute] Modified: ${path.relative(workDir, filePath)}`);
-      }
-    } catch (err) {
-      console.log(`[Transmute] Error processing ${filePath}: ${err.message}`);
-    }
-  };
-
-  await scanDir(workDir);
-
-  return results;
-};
+  return { filesModified: totalModified, fixes: [] };
+}
 
 const runTransformationPipeline = async (io, sessionId, config) => {
   const logs = new LogStreamer(sessionId);
@@ -351,8 +445,8 @@ const runTransformationPipeline = async (io, sessionId, config) => {
   let workDir = null;
   let repoInfo = null;
 
-  // Generate target branch name
-  const targetBranch = `devops-deploy-${projectName.toLowerCase().replace(/[^a-z0-9]/g, '-').substring(0, 8)}`;
+  // Generate target branch name - shadow branch for standardized deployment
+  const targetBranch = `devops-standardized-${projectName.toLowerCase().replace(/[^a-z0-9]/g, '-').substring(0, 6)}`;
 
   try {
     logs.emit('info', `Starting pipeline for: ${projectName}`);
@@ -402,6 +496,156 @@ const runTransformationPipeline = async (io, sessionId, config) => {
       const localGit = simpleGit(workDir);
       actualBranch = (await localGit.branch()).current || 'main';
       logs.success(`Using local directory`);
+    }
+
+    // ===== PHASE 1: AI ARCHITECT MASTER AUDIT =====
+    logs.emit('info', `Phase 1: AI Master Audit starting...`);
+
+    // Run the full architect audit (structure + packages + configs + source)
+    const masterAudit = await architectAudit(workDir);
+
+    // Run the deep audit for path detection
+    const discovery = await deepAuditRepository(workDir);
+
+    // Combine both audits
+    const fullAudit = {
+      ...masterAudit,
+      ...discovery,
+      architectRecommendations: masterAudit.recommendations
+    };
+
+    logs.emit('info', `Files mapped: ${masterAudit.structure.split('\n').length}`);
+    logs.emit('info', `Packages found: ${masterAudit.packages.length}`);
+
+    if (discovery.frontend.path) {
+      logs.emit('info', `Frontend Heart: ${discovery.frontend.path}`);
+      logs.emit('info', `Framework: ${discovery.frontend.framework}`);
+      logs.emit('info', `Build: cd ${discovery.frontend.path} && ${discovery.frontend.buildScript}`);
+      logs.emit('info', `Output: ${discovery.frontend.path}/${discovery.frontend.outDir}`);
+    }
+    if (discovery.backend.path) {
+      logs.emit('info', `Backend Heart: ${discovery.backend.path}`);
+      logs.emit('info', `Entry: ${discovery.backend.entryFile || 'auto-detect'}`);
+    }
+    logs.emit('info', `isMERN: ${discovery.isMERN}`);
+
+    // Log AI recommendations
+    if (masterAudit.recommendations.length > 0) {
+      logs.emit('info', `AI Recommendations:`);
+      masterAudit.recommendations.forEach(rec => {
+        logs.emit('info', `  - ${rec}`);
+      });
+    }
+
+    // ===== PHASE 1.5: AI MIGRATION PLANNER =====
+    logs.emit('info', `Phase 1.5: AI generating MigrationPlan...`);
+
+    const aiService = createAIService();
+    const migrationPlanResult = await aiService.generateMigrationPlan(
+      masterAudit.structure,
+      masterAudit.packages
+    );
+
+    if (migrationPlanResult.success && migrationPlanResult.plan) {
+      logs.emit('info', `MigrationPlan: ${migrationPlanResult.movesCount} file moves`);
+
+      // ===== PHASE 1.5.5: ATOMIC FILE MIGRATION =====
+      // Use the Atomic Mover (repoManager) instead of ai.service's version
+      const atomicResults = await executeMigration(workDir, migrationPlanResult.plan.moves, logs);
+      logs.emit('info', `Atomic Move: ${atomicResults.moved} moved, ${atomicResults.skipped} skipped, ${atomicResults.failed} failed`);
+
+      // Cleanup empty directories left behind
+      await cleanupEmptyDirs(workDir);
+
+      // Verify migration
+      const verification = await verifyMigration(workDir, migrationPlanResult.plan.moves);
+      if (verification.valid) {
+        logs.emit('info', `Migration verified: all ${verification.found.length} files in place`);
+      } else {
+        logs.emit('warning', `Migration incomplete: ${verification.missing.length} files missing`);
+      }
+
+      // ===== PHASE 1.8: DEPENDENCY SPLITTER =====
+      logs.emit('info', `Phase 1.8: Splitting package.json for MERN deployment...`);
+
+      const splitResult = await splitPackageJson(workDir);
+      if (splitResult.success && !splitResult.alreadySplit) {
+        const frontendDeps = Object.keys(splitResult.frontend || {}).length;
+        const backendDeps = Object.keys(splitResult.backend || {}).length;
+        logs.emit('info', `Dependencies split: ${frontendDeps} frontend, ${backendDeps} backend`);
+      } else if (splitResult.alreadySplit) {
+        logs.emit('info', `Dependencies already split`);
+      } else {
+        logs.emit('warning', `Dependency split skipped: ${splitResult.error}`);
+      }
+
+      // Execute refactor files (remove app.listen, etc.)
+      if (migrationPlanResult.plan.refactorFiles?.length > 0) {
+        logs.emit('info', `Refactoring ${migrationPlanResult.plan.refactorFiles.length} server files...`);
+        const refactorResults = await aiService.executeMigrationPlan(workDir, {
+          refactorFiles: migrationPlanResult.plan.refactorFiles
+        }, logs);
+        logs.emit('info', `Refactor: ${refactorResults.refactored} refactored, ${refactorResults.failed} failed`);
+      }
+
+      // ===== PHASE 1.75: AI REFACTOR LOOP (Surgical Re-Wiring) =====
+      if (migrationPlanResult.plan?.refactorFiles?.length > 0) {
+        logs.emit('info', `Phase 1.75: AI Surgical Refactor (${migrationPlanResult.plan.refactorFiles.length} files)...`);
+
+        const aiRefactor = createAIRefactorService();
+        const refactorList = migrationPlanResult.plan.refactorFiles.map(f => path.join(workDir, f));
+
+        const surgicalResults = await aiRefactor.batchRefactor(refactorList, migrationPlanResult.plan, logs);
+        logs.emit('info', `Surgical Refactor: ${surgicalResults.refactored} fixed, ${surgicalResults.skipped} no-change, ${surgicalResults.failed} failed`);
+
+        if (surgicalResults.failed > 0) {
+          logs.emit('warning', `Some surgical rewiring failed: ${surgicalResults.errors.join(', ')}`);
+        }
+      } else {
+        logs.emit('info', `Phase 1.75: No files require surgical re-wiring`);
+      }
+    } else if (!migrationPlanResult.success && migrationPlanResult.error) {
+      logs.emit('info', `AI MigrationPlan skipped: ${migrationPlanResult.error}`);
+      // Fallback: Use standard MERN structure if AI fails
+      logs.emit('info', `Using fallback MERN structure (AI unavailable)...`);
+      migrationPlanResult.plan = {
+        moves: [],
+        refactorFiles: ['backend/server.js', 'backend/src/app.js'],
+        outputDir: 'frontend/dist',
+        buildCommand: 'cd frontend && npm install && npm run build',
+        package_strategy: 'ALREADY_SEPARATE'
+      };
+      migrationPlanResult.success = true;
+      migrationPlanResult.movesCount = 0;
+    }
+
+    // ===== PHASE 2: AI-ASSISTED BRANCH SURGERY =====
+    logs.emit('info', `Phase 2: AI analyzing audit map for surgery...`);
+
+    const surgeryResult = await aiService.performBranchSurgery(discovery);
+
+    if (surgeryResult.success && surgeryResult.instructions?.length > 0) {
+      logs.emit('info', `AI generated ${surgeryResult.count} surgical instructions`);
+
+      // Execute the surgery
+      const surgeryExecution = await aiService.executeSurgery(workDir, surgeryResult.instructions, logs);
+      logs.emit('info', `Surgery complete: ${surgeryExecution.applied} applied, ${surgeryExecution.failed} failed`);
+
+      if (surgeryExecution.failed > 0) {
+        logs.emit('warning', `Some surgical changes could not be applied`);
+      }
+    } else if (!surgeryResult.success && surgeryResult.error) {
+      logs.emit('warning', `AI surgery skipped: ${surgeryResult.error}`);
+      // Apply basic surgery rules without AI
+      logs.emit('info', `Applying rule-based corrections instead...`);
+    } else {
+      logs.emit('info', `No surgical corrections needed`);
+    }
+
+    // Also run the rule-based corrections as backup
+    const aiCorrections = await performAICorrection(workDir, discovery, logs);
+    if (aiCorrections.errors.length > 0) {
+      logs.emit('warning', `Rule-based corrections had issues: ${aiCorrections.errors.join(', ')}`);
     }
 
     // ===== STEP 2: ANALYSIS =====
@@ -460,22 +704,12 @@ const runTransformationPipeline = async (io, sessionId, config) => {
 
     // ===== STEP 3: TRANSMUTATION (Source Code Fixes) =====
     logs.step(3, totalSteps, 'Transmuting source code');
-    logs.emit('info', `Scanning for localhost patterns...`);
+    logs.emit('info', `Scanning for localhost patterns in discovered folders...`);
 
-    const transmutationResults = await transmuteSourceCode(workDir, logs, {
-      projectType: analysis.projectType.type,
-      envVars
-    });
+    // Use discovery to target specific folders for transmutation
+    const transmutationResults = await transmuteSourceCode(workDir, discovery);
 
     logs.success(`Transmuted ${transmutationResults.filesModified} files`);
-    if (transmutationResults.fixes.length > 0) {
-      transmutationResults.fixes.slice(0, 5).forEach(fix => {
-        logs.emit('info', `  -> ${fix.file}: ${fix.find} -> ${fix.replace}`);
-      });
-      if (transmutationResults.fixes.length > 5) {
-        logs.emit('info', `  ... and ${transmutationResults.fixes.length - 5} more fixes`);
-      }
-    }
 
     // Update project status after transmutation
     await updateProjectStatus(projectName, {
@@ -487,8 +721,10 @@ const runTransformationPipeline = async (io, sessionId, config) => {
     logs.step(4, totalSteps, 'Generating deployment files');
     logs.emit('info', `Creating vercel.json...`);
 
+    // Pass full audit to transformer for intelligent config generation
     const transformResult = await transformForDeployment(workDir, analysis.projectType.type, {
-      includeNowJson: options.includeNowJson || false
+      includeNowJson: options.includeNowJson || false,
+      discovery: fullAudit  // Use full AI audit for accurate vercel.json
     });
 
     logs.success(`Created ${transformResult.files.length} deployment files`);
@@ -496,7 +732,7 @@ const runTransformationPipeline = async (io, sessionId, config) => {
     // Log directory structure for debugging
     const listDir = async (dir, prefix = '') => {
       try {
-        const entries = await fs.readdir(dir, { withFileTypes: true });
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
         for (const entry of entries.slice(0, 20)) {
           logs.emit('info', `  ${prefix}${entry.name}${entry.isDirectory() ? '/' : ''}`);
           if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') {
@@ -552,24 +788,39 @@ const runTransformationPipeline = async (io, sessionId, config) => {
         fs.writeFileSync(gitignorePath, gitignoreContent + '\nnode_modules/\n');
       }
 
-      fs.sync && fs.sync();
-
       logs.emit('info', `Git add...`);
-      await git.add('.');
-      await git.add('api');  // Add api folder explicitly
-      await git.add('vercel.json');
-      logs.emit('info', `Staged vercel.json and api/`);
+      await git.add('.');  // Add all files
+      // Explicitly add frontend and backend for MERN deployments
+      await git.add('frontend').catch(() => {});  // Ignore if not exists
+      await git.add('backend').catch(() => {});    // Ignore if not exists
+      await git.add('api').catch(() => {});        // Ignore if not exists (created by AI or skipped)
+      await git.add('vercel.json');               // Add vercel config
+
+      // Fallback: ensure api folder exists for serverless bridge
+      const apiDir = path.join(workDir, 'api');
+      if (!fs.existsSync(apiDir)) {
+        logs.emit('info', `Creating api/ folder for serverless bridge...`);
+        fs.mkdirSync(apiDir, { recursive: true });
+        // Create basic serverless bridge
+        fs.writeFileSync(path.join(apiDir, 'index.js'),
+          `// Serverless bridge\nconst app = require('../backend/src/app');\nmodule.exports = async (req, res) => app(req, res);\n`
+        );
+      }
+
+      logs.emit('info', `Staged frontend/, backend/, api/, and vercel.json`);
 
       logs.emit('info', `Git commit...`);
-      await git.commit('Deploy via DevOps Panel - Transmuted for Vercel');
+      await git.commit('AI-Standardized MERN deployment via DevOps Panel');
+      logs.emit('info', `Created shadow branch: ${targetBranch} (never touches main)`);
 
-      logs.emit('info', `Creating ${targetBranch} branch...`);
+      logs.emit('info', `Creating ${targetBranch} shadow branch...`);
+      logs.emit('info', `(Isolated branch - main code is untouched)`);
 
       await git.branch(['-m', 'HEAD', targetBranch]).catch(() => {
         return git.checkoutLocalBranch(targetBranch);
       });
 
-      logs.emit('info', `Git push to ${targetBranch}...`);
+      logs.emit('info', `Git push ${targetBranch} shadow branch to original repo...`);
 
       try {
         const remotes = await git.getRemotes();
@@ -600,8 +851,9 @@ const runTransformationPipeline = async (io, sessionId, config) => {
         throw new Error(`Git push failed: ${pushError?.message}`);
       }
 
-      logs.success(`Code pushed to ${targetBranch} branch`);
+      logs.success(`Standardized code pushed to ${targetBranch} shadow branch`);
       logs.emit('info', `Original repo: ${repoUrl}`);
+      logs.emit('info', `(Main branch is untouched - all changes in isolated shadow branch)`);
 
       // Update project with branch info
       await updateProjectStatus(projectName, {
