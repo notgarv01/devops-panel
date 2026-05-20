@@ -1,5 +1,5 @@
 const { execSync } = require('child_process');
-const fs = require('fs');
+const fs = require('fs-extra');
 const path = require('path');
 const os = require('os');
 const simpleGit = require('simple-git');
@@ -171,7 +171,8 @@ async function deepAuditRepository(workDir) {
 
         if (hasVite || hasReact || hasVue) {
           audit.frontend.path = relativeDirForAudit === '.' ? 'frontend' : relativeDirForAudit;
-          audit.frontend.buildScript = pkg.scripts?.build || (hasVite ? 'vite build' : 'npm run build');
+          // Always use npm run build - it respects the package.json scripts
+          audit.frontend.buildScript = 'npm run build';
           audit.frontend.framework = hasVite ? 'Vite' : (hasReact ? 'React' : 'Vue');
 
           // Detect output directory from vite.config.js
@@ -238,11 +239,12 @@ async function deepAuditRepository(workDir) {
 // Alias for backward compatibility
 const analyzeRepository = deepAuditRepository;
 
-// ===== PHASE 2: AI-DRIVEN CORRECTION =====
+// ===== PHASE 2: AI-ASSISTED BRANCH SURGERY =====
 async function performAICorrection(workDir, discovery, logs) {
   const corrections = {
     viteBaseFixed: false,
     apiUrlsFixed: 0,
+    indexHtmlFixed: false,
     errors: []
   };
 
@@ -269,6 +271,20 @@ async function performAICorrection(workDir, discovery, logs) {
         } else {
           logs.emit('info', `vite.config.js already has correct base '/'`);
         }
+      }
+    }
+
+    // 2. Fix index.html location - Vite expects it at frontend root, not src/
+    if (frontendPath) {
+      const indexInSrc = path.join(workDir, frontendPath, 'src', 'index.html');
+      const indexInRoot = path.join(workDir, frontendPath, 'index.html');
+
+      if (fs.existsSync(indexInSrc) && !fs.existsSync(indexInRoot)) {
+        await fs.move(indexInSrc, indexInRoot);
+        corrections.indexHtmlFixed = true;
+        logs.emit('info', `Fixed index.html location: src/index.html → frontend/index.html`);
+      } else if (fs.existsSync(indexInRoot)) {
+        logs.emit('info', `index.html verified at ${frontendPath}/`);
       }
     }
 
@@ -322,17 +338,6 @@ async function performAICorrection(workDir, discovery, logs) {
     }
 
     logs.emit('info', `API URLs corrected: ${corrections.apiUrlsFixed} files`);
-
-    // 3. Verify index.html exists in frontend root
-    if (frontendPath) {
-      const indexHtmlPath = path.join(workDir, frontendPath, 'index.html');
-      if (fs.existsSync(indexHtmlPath)) {
-        logs.emit('info', `index.html verified at ${frontendPath}/`);
-      } else {
-        corrections.errors.push('index.html not found in frontend root');
-        logs.emit('warning', `index.html NOT found in ${frontendPath}/`);
-      }
-    }
 
   } catch (error) {
     console.error('[AI Correction] Error:', error.message);

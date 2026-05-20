@@ -37,7 +37,8 @@ async function getRepoStructure(workDir) {
   };
 
   const allFiles = await scanDir(workDir);
-  return allFiles.join('\n');
+  // Sanitize: Convert Windows backslashes to forward slashes for API compatibility
+  return allFiles.join('\n').replace(/\\/g, '/');
 }
 
 // ===== STEP 2: PACKAGE ANALYSIS =====

@@ -29,6 +29,13 @@ async function executeMigration(workDir, moves, logs) {
     const oldPath = path.join(workDir, task.from);
     const newPath = path.join(workDir, task.to);
 
+    // Skip if file is already in its destination (prevents fs.move self-copy error)
+    if (oldPath === newPath) {
+      logs?.emit('info', `  ✓ ${task.from} → (already in place)`);
+      results.skipped++;
+      continue;
+    }
+
     try {
       const exists = await fs.pathExists(oldPath);
 

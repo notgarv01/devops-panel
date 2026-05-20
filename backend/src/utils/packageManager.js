@@ -164,23 +164,29 @@ class DependencySplitter {
 async function splitPackageJson(workDir) {
   const splitter = new DependencySplitter();
 
-  // Find root package.json
+  // Find root package.json (optional for MERN - may already be split)
   const rootPkgPath = path.join(workDir, 'package.json');
+  const frontendPkgPath = path.join(workDir, 'frontend', 'package.json');
+  const backendPkgPath = path.join(workDir, 'backend', 'package.json');
+
+  // Check if already split
+  if (await fs.pathExists(frontendPkgPath) && await fs.pathExists(backendPkgPath)) {
+    console.log('[DepSplitter] Packages already split, skipping');
+    return { success: true, alreadySplit: true };
+  }
+
+  // If no root package.json but we have frontend/backend, that's fine
   if (!await fs.pathExists(rootPkgPath)) {
+    // Check if frontend/backend packages exist (MERN structure without root)
+    if (await fs.pathExists(frontendPkgPath) || await fs.pathExists(backendPkgPath)) {
+      console.log('[DepSplitter] MERN structure detected without root package.json - OK');
+      return { success: true, alreadySplit: true };
+    }
     return { success: false, error: 'No package.json found' };
   }
 
   const rootPkg = JSON.parse(await fs.readFile(rootPkgPath, 'utf8'));
   const allDeps = { ...rootPkg.dependencies, ...rootPkg.devDependencies };
-
-  // Check if split already exists
-  const frontendPkgPath = path.join(workDir, 'frontend', 'package.json');
-  const backendPkgPath = path.join(workDir, 'backend', 'package.json');
-
-  if (await fs.pathExists(frontendPkgPath) && await fs.pathExists(backendPkgPath)) {
-    console.log('[DepSplitter] Packages already split, skipping');
-    return { success: true, alreadySplit: true };
-  }
 
   // Perform split
   const split = splitter.ruleBasedSplit(allDeps);

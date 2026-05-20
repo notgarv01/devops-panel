@@ -7,13 +7,106 @@ const path = require('path');
 
 class AIService {
   constructor(apiKey = null) {
-    // Check for Gemini first, then fall back to OpenAI
-    this.geminiKey = apiKey || process.env.GEMINI_API_KEY;
+    // Collect all available API keys
+    this.claudeKeys = [
+      process.env.CLAUDE_API_KEY,
+      process.env.CLAUDE_API_KEY_2,
+      process.env.CLAUDE_API_KEY_3
+    ].filter(k => k && k.trim());
+
+    this.geminiKeys = [
+      apiKey || process.env.GEMINI_API_KEY,
+      process.env.GEMINI_API_KEY_2
+    ].filter(k => k && k.trim());
+
     this.openaiKey = process.env.OPENAI_API_KEY;
+    this.openrouterKey = process.env.OPENROUTER_API_KEY;
+
     this.geminiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta';
     this.openaiBaseUrl = process.env.AI_API_URL || 'https://api.openai.com/v1';
-    this.model = process.env.AI_MODEL || 'gemini-2.0-flash';
-    this.useGemini = !!(this.geminiKey);
+    this.openrouterBaseUrl = 'https://openrouter.ai/api/v1';
+    this.model = process.env.AI_MODEL || 'claude-3-5-sonnet-20241022';
+    this.openrouterModel = process.env.OPENROUTER_MODEL || 'anthropic/claude-3-haiku';
+
+    // Track current key index for rotation
+    this.currentClaudeIndex = 0;
+    this.currentGeminiIndex = 0;
+
+    // Determine which API to use
+    this.useGemini = false;
+    this.useClaude = false;
+    this.useOpenRouter = false;
+
+    if (this.claudeKeys.length > 0) {
+      this.useClaude = true;
+    } else if (this.openrouterKey) {
+      this.useOpenRouter = true;
+    } else if (this.geminiKeys.length > 0) {
+      this.useGemini = true;
+    }
+  }
+
+  // Get next Claude key (rotation)
+  getNextClaudeKey() {
+    if (this.claudeKeys.length === 0) return null;
+    this.currentClaudeIndex = (this.currentClaudeIndex + 1) % this.claudeKeys.length;
+    return this.claudeKeys[this.currentClaudeIndex];
+  }
+
+  // Get next Gemini key (rotation)
+  getNextGeminiKey() {
+    if (this.geminiKeys.length === 0) return null;
+    this.currentGeminiIndex = (this.currentGeminiIndex + 1) % this.geminiKeys.length;
+    return this.geminiKeys[this.currentGeminiIndex];
+  }
+
+  // Try API call with fallback to next key
+  async callWithFallback(provider, callFn) {
+    let lastError = null;
+
+    // Try Claude keys
+    if (provider === 'claude') {
+      for (let i = 0; i < this.claudeKeys.length; i++) {
+        try {
+          const key = this.claudeKeys[i];
+          const result = await callFn(key);
+          return result;
+        } catch (error) {
+          lastError = error;
+          // Check if it's a credit limit or quota error - switch to next key
+          if (error.response?.status === 429 || error.response?.status === 400) {
+            console.log(`[AI Service] Claude key ${i + 1} hit limit, trying next...`);
+            continue;
+          }
+          // For auth errors, don't retry other keys
+          if (error.response?.status === 401) {
+            break;
+          }
+        }
+      }
+    }
+
+    // Try Gemini keys
+    if (provider === 'gemini') {
+      for (let i = 0; i < this.geminiKeys.length; i++) {
+        try {
+          const key = this.geminiKeys[i];
+          const result = await callFn(key);
+          return result;
+        } catch (error) {
+          lastError = error;
+          if (error.response?.status === 429 || error.response?.status === 400) {
+            console.log(`[AI Service] Gemini key ${i + 1} hit limit, trying next...`);
+            continue;
+          }
+          if (error.response?.status === 401) {
+            break;
+          }
+        }
+      }
+    }
+
+    throw lastError;
   }
 
   async request(method, endpoint, data = null, retries = 3) {
@@ -42,39 +135,37 @@ class AIService {
   }
 
   async geminiRequest(method, endpoint, data) {
-    const apiKey = this.geminiKey;
-    let url, options;
+    // Try all Gemini keys with fallback
+    for (let i = 0; i < this.geminiKeys.length; i++) {
+      const apiKey = this.geminiKeys[i];
+      try {
+        let url, options;
 
-    if (endpoint === '/chat/completions') {
-      // Convert OpenAI format to Gemini format
-      const contents = this.convertToGeminiContents(data.messages);
-      const prompt = data.messages?.[data.messages.length - 1]?.content || '';
+        if (endpoint === '/chat/completions') {
+          const contents = this.convertToGeminiContents(data.messages);
+          const prompt = data.messages?.[data.messages.length - 1]?.content || '';
+          url = `${this.geminiBaseUrl}/models/${this.model}:generateContent?key=${apiKey}`;
+          options = {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            data: {
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { maxOutputTokens: data.max_tokens || 500, temperature: data.temperature || 0.3 }
+            },
+            timeout: 30000
+          };
+        } else {
+          url = `${this.geminiBaseUrl}${endpoint}?key=${apiKey}`;
+          options = { method, headers: { 'Content-Type': 'application/json' }, data, timeout: 30000 };
+        }
 
-      url = `${this.geminiBaseUrl}/models/${this.model}:generateContent?key=${apiKey}`;
-      options = {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        data: {
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            maxOutputTokens: data.max_tokens || 500,
-            temperature: data.temperature || 0.3
-          }
-        },
-        timeout: 30000
-      };
-    } else {
-      url = `${this.geminiBaseUrl}${endpoint}?key=${apiKey}`;
-      options = {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        data,
-        timeout: 30000
-      };
+        const response = await axios(url, options);
+        return response.data;
+      } catch (error) {
+        console.log(`[Gemini] Key ${i + 1} failed: ${error.response?.status || error.message}`);
+        if (i === this.geminiKeys.length - 1) throw error;
+      }
     }
-
-    const response = await axios(url, options);
-    return response.data;
   }
 
   convertToGeminiContents(messages) {
@@ -136,7 +227,17 @@ class AIService {
       const userPrompt = `Build failed. Last 25 log lines:\n${logText}`;
 
       let response;
-      if (this.useGemini) {
+      if (this.useClaude) {
+        const claudeRes = await axios.post('https://api.anthropic.com/v1/messages', {
+          model: this.model,
+          max_tokens: 500,
+          messages: [{ role: 'user', content: `${systemPrompt}\n\n${userPrompt}` }]
+        }, {
+          headers: { 'x-api-key': this.claudeKey, 'anthropic-version': '2023-06-01' },
+          timeout: 60000
+        });
+        response = claudeRes.data?.content?.[0]?.text || 'AI Limit hit.';
+      } else if (this.useGemini) {
         response = await this.geminiDiagnose(userPrompt, systemPrompt);
       } else {
         response = await this.request('POST', '/chat/completions', {
@@ -153,8 +254,8 @@ class AIService {
 
       return {
         success: true,
-        diagnosis: this.useGemini ? response : response,
-        issue: this.extractIssue(this.useGemini ? response : response),
+        diagnosis: response,
+        issue: this.extractIssue(response),
         suggestion: 'Check Vercel dashboard for full logs',
         confidence: 'medium'
       };
@@ -219,7 +320,19 @@ Respond ONLY with valid JSON array of instructions. Example format:
 
       let surgeryInstructions;
 
-      if (this.useGemini) {
+      if (this.useClaude) {
+        const response = await axios.post('https://api.anthropic.com/v1/messages', {
+          model: this.model,
+          max_tokens: 800,
+          messages: [{ role: 'user', content: `${systemPrompt}\n\n${userPrompt}` }]
+        }, {
+          headers: { 'x-api-key': this.claudeKey, 'anthropic-version': '2023-06-01' },
+          timeout: 60000
+        });
+        const text = response.data?.content?.[0]?.text || '[]';
+        const jsonMatch = text.match(/\[[\s\S]*\]/);
+        surgeryInstructions = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
+      } else if (this.useGemini) {
         const url = `${this.geminiBaseUrl}/models/${this.model}:generateContent?key=${this.geminiKey}`;
         const response = await axios.post(url, {
           contents: [{ parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
@@ -314,20 +427,19 @@ Respond ONLY with valid JSON array of instructions. Example format:
   // ===== STEP 2: OMNI-ARCHITECT SYSTEM PROMPT =====
   // The central nervous system - drives the AI as a Cloud Architect
   async generateMigrationPlan(repoStructure, packages = []) {
-    const hasApiKey = this.geminiKey || this.openaiKey;
-    if (!hasApiKey) {
+    // Check if any API key is available
+    if (this.claudeKeys.length === 0 && this.geminiKeys.length === 0 && !this.openaiKey) {
       return {
         success: false,
         plan: null,
-        error: 'AI not configured. Set GEMINI_API_KEY or OPENAI_API_KEY.'
+        error: 'AI not configured. Set CLAUDE_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY.'
       };
     }
 
-    try {
-      const packageNames = packages.map(p => p.name || p.path).join(', ');
-      const packageCount = packages.length;
+    const packageNames = packages.map(p => p.name || p.path).join(', ');
+    const packageCount = packages.length;
 
-      const systemPrompt = `ACT AS: A Senior DevOps Architect & Full-Stack Automation Engineer.
+    const systemPrompt = `ACT AS: A Senior DevOps Architect & Full-Stack Automation Engineer.
 
 CONTEXT:
 I have a MERN repository that is 'unstructured' (folders are messy, mixed, or non-standard). I need you to generate a 'Master Migration Plan' to standardize this into a Vercel-compatible MERN Mono-repo.
@@ -364,29 +476,119 @@ RULES:
 - If a file is shared (like a .env), move it to /backend.
 - Ensure 'index.html' is moved to the root of /frontend.`;
 
-      const userPrompt = `Repository Structure (${repoStructure.split('\n').length} files):
-${repoStructure}
+    // Truncate repo structure to prevent AI JSON parsing errors
+    const fileLines = repoStructure.split('\n');
+    const truncatedFiles = fileLines.length > 35 ? fileLines.slice(0, 35).join('\n') + '\n... (truncated)' : repoStructure;
+
+    const userPrompt = `Repository Structure (${fileLines.length} files, showing first 35):
+${truncatedFiles}
 
 Packages found (${packageCount}): ${packageNames}
 
 Generate the Master Migration Plan as STRICT JSON.`;
 
-      let plan;
-      if (this.useGemini) {
-        const url = `${this.geminiBaseUrl}/models/${this.model}:generateContent?key=${this.geminiKey}`;
-        const response = await axios.post(url, {
-          contents: [{ parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
-          generationConfig: {
-            maxOutputTokens: 1000,
-            temperature: 0.2
-          }
-        }, { timeout: 45000 });
+    let plan;
+    let lastError = null;
 
-        const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-        // Extract JSON from response
+    // Try Claude keys with fallback
+    if (this.claudeKeys.length > 0) {
+      for (let keyIndex = 0; keyIndex < this.claudeKeys.length; keyIndex++) {
+        const key = this.claudeKeys[keyIndex];
+        try {
+          console.log(`[Architect] Trying Claude API (key ${keyIndex + 1}/${this.claudeKeys.length})...`);
+
+          const response = await axios.post('https://api.anthropic.com/v1/messages', {
+            model: this.model,
+            max_tokens: 1500,
+            messages: [{ role: 'user', content: `${systemPrompt}\n\n${userPrompt}` }]
+          }, {
+            headers: {
+              'x-api-key': key,
+              'anthropic-version': '2023-06-01',
+              'Content-Type': 'application/json'
+            },
+            timeout: 60000
+          });
+
+          const text = response.data?.content?.[0]?.text || '{}';
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          plan = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+          console.log(`[Architect] Claude key ${keyIndex + 1} succeeded!`);
+          break;
+        } catch (claudeError) {
+          lastError = claudeError;
+          console.log(`[Architect] Claude key ${keyIndex + 1} failed: ${claudeError.response?.status || claudeError.message}`);
+
+          // If auth error, don't try other keys
+          if (claudeError.response?.status === 401) {
+            break;
+          }
+          // Try next key
+        }
+      }
+    }
+
+    // Try Gemini keys if Claude failed
+    if (!plan && this.geminiKeys.length > 0) {
+      for (let keyIndex = 0; keyIndex < this.geminiKeys.length; keyIndex++) {
+        const key = this.geminiKeys[keyIndex];
+        try {
+          console.log(`[Architect] Trying Gemini API (key ${keyIndex + 1}/${this.geminiKeys.length})...`);
+
+          const url = `${this.geminiBaseUrl}/models/${this.model}:generateContent?key=${key}`;
+          const response = await axios.post(url, {
+            contents: [{ parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
+            generationConfig: { maxOutputTokens: 1000, temperature: 0.2 }
+          }, { timeout: 45000 });
+
+          const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          plan = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+          console.log(`[Architect] Gemini key ${keyIndex + 1} succeeded!`);
+          break;
+        } catch (geminiError) {
+          lastError = geminiError;
+          console.log(`[Architect] Gemini key ${keyIndex + 1} failed: ${geminiError.response?.status || geminiError.message}`);
+
+          if (geminiError.response?.status === 401) {
+            break;
+          }
+        }
+      }
+    }
+
+    // Try OpenRouter as fallback
+    if (!plan && this.openrouterKey) {
+      try {
+        console.log('[Architect] Trying OpenRouter API...');
+        const response = await axios.post(`${this.openrouterBaseUrl}/chat/completions`, {
+          model: this.openrouterModel,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          max_tokens: 1000,
+          temperature: 0.2
+        }, {
+          headers: {
+            'Authorization': `Bearer ${this.openrouterKey}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 60000
+        });
+        const text = response.data?.choices?.[0]?.message?.content || '{}';
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         plan = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
-      } else {
+      } catch (openrouterError) {
+        lastError = openrouterError;
+        console.log(`[Architect] OpenRouter failed: ${openrouterError.message}`);
+      }
+    }
+
+    // Try OpenAI as last resort
+    if (!plan && this.openaiKey) {
+      try {
+        console.log('[Architect] Trying OpenAI API...');
         const response = await this.request('POST', '/chat/completions', {
           model: this.model,
           messages: [
@@ -399,42 +601,46 @@ Generate the Master Migration Plan as STRICT JSON.`;
         const text = response.choices[0]?.message?.content;
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         plan = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+      } catch (openaiError) {
+        lastError = openaiError;
+        console.log(`[Architect] OpenAI failed: ${openaiError.message}`);
       }
+    }
 
-      // Normalize plan fields to match expected format
-      if (plan.migrations && !plan.moves) {
-        plan.moves = plan.migrations;
-      }
-      if (plan.refactor_list && !plan.refactorFiles) {
-        plan.refactorFiles = plan.refactor_list;
-      }
-      if (plan.vercel_output_dir && !plan.outputDir) {
-        plan.outputDir = plan.vercel_output_dir;
-      }
-      if (plan.vercel_build_command && !plan.buildCommand) {
-        plan.buildCommand = plan.vercel_build_command;
-      }
-
-      console.log(`[Architect] Omni-Architect MigrationPlan generated:`);
-      console.log(`  Migrations: ${plan.moves?.length || 0}`);
-      console.log(`  Refactor: ${plan.refactorFiles?.length || 0}`);
-      console.log(`  Package Strategy: ${plan.package_strategy}`);
-      console.log(`  Output: ${plan.outputDir}`);
-
-      return {
-        success: true,
-        plan: plan,
-        movesCount: plan.moves?.length || 0
-      };
-
-    } catch (error) {
-      console.error('[Architect] Omni-Architect failed:', error.message);
+    if (!plan) {
+      console.error('[Architect] All AI providers failed:', lastError?.message);
       return {
         success: false,
         plan: null,
-        error: error.message
+        error: `AI unavailable: ${lastError?.message}`
       };
     }
+
+    // Normalize plan fields to match expected format
+    if (plan.migrations && !plan.moves) {
+      plan.moves = plan.migrations;
+    }
+    if (plan.refactor_list && !plan.refactorFiles) {
+      plan.refactorFiles = plan.refactor_list;
+    }
+    if (plan.vercel_output_dir && !plan.outputDir) {
+      plan.outputDir = plan.vercel_output_dir;
+    }
+    if (plan.vercel_build_command && !plan.buildCommand) {
+      plan.buildCommand = plan.vercel_build_command;
+    }
+
+    console.log(`[Architect] Omni-Architect MigrationPlan generated:`);
+    console.log(`  Migrations: ${plan.moves?.length || 0}`);
+    console.log(`  Refactor: ${plan.refactorFiles?.length || 0}`);
+    console.log(`  Package Strategy: ${plan.package_strategy}`);
+    console.log(`  Output: ${plan.outputDir}`);
+
+    return {
+      success: true,
+      plan: plan,
+      movesCount: plan.moves?.length || 0
+    };
   }
 
   // ===== STEP 3: PHYSICAL MIGRATION (The Mover) =====
@@ -459,6 +665,12 @@ Generate the Master Migration Plan as STRICT JSON.`;
           try {
             const fromPath = path.join(workDir, move.from);
             const toPath = path.join(workDir, move.to);
+
+            // Skip if source and destination are the same (file already in place)
+            if (fromPath === toPath) {
+              logs?.emit('info', `  Skip (in place): ${move.from}`);
+              continue;
+            }
 
             // Check if source exists
             if (!fs.existsSync(fromPath)) {

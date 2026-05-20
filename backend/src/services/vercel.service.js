@@ -359,13 +359,13 @@ class VercelService {
     } = deploymentData;
 
     const body = {
-      name,
+      name: `${name}-${Date.now()}`,  // Unique name to force fresh deployment
       target  // Explicitly set target (production or preview)
     };
 
     // Include projectId as query parameter for existing projects
     // NOT as part of the request body
-    const queryParams = [];
+    const queryParams = ['skipAutoDetectionConfirmation=1'];  // Use auto framework detection
     if (projectId) {
       queryParams.push(`projectId=${projectId}`);
     }
