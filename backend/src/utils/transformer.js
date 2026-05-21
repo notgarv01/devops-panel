@@ -456,6 +456,7 @@ const injectGoldenTemplate = async (workDir, audit) => {
   }
 
   // Zero-404 Vercel config - no builds array, uses rewrites instead
+  // Use forward slashes for cross-platform compatibility (Vercel is Linux)
   const goldenConfig = {
     "version": 2,
     "buildCommand": "cd frontend && npm install && npm run build",
@@ -503,9 +504,10 @@ const generateTailoredConfig = async (workDir, audit) => {
     : `npm install && ${buildScript}`;
 
   // Output directory is relative to where buildCommand runs
+  // Use forward slashes for cross-platform compatibility (Vercel is Linux)
   const outputDirectory = frontendDir
-    ? path.join(frontendDir, outputDir)
-    : outputDir;
+    ? `${frontendDir}/${outputDir}`.replace(/\\/g, '/')
+    : outputDir.replace(/\\/g, '/');
 
   // Zero-404 config - no builds array (causes Vercel to skip builds)
   const vercelConfig = {

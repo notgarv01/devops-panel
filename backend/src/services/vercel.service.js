@@ -359,7 +359,7 @@ class VercelService {
     } = deploymentData;
 
     const body = {
-      name: `${name}-${Date.now()}`,  // Unique name to force fresh deployment
+      name,  // Use exact project name to target existing Vercel project
       target  // Explicitly set target (production or preview)
     };
 

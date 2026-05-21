@@ -38,9 +38,17 @@ async function executeMigration(workDir, moves, logs) {
 
     try {
       const exists = await fs.pathExists(oldPath);
+      const isDirectory = exists && (await fs.stat(oldPath)).isDirectory();
 
       if (!exists) {
         logs?.emit('warning', `[AtomicMover] Skip: ${task.from} not found`);
+        results.skipped++;
+        continue;
+      }
+
+      // Skip if trying to move a directory (only move files)
+      if (isDirectory) {
+        logs?.emit('warning', `[AtomicMover] Skip: ${task.from} is a directory, not moving folders`);
         results.skipped++;
         continue;
       }
@@ -115,8 +123,14 @@ async function verifyMigration(workDir, moves) {
     if (exists) {
       verification.found.push(task.to);
     } else {
-      verification.missing.push(task.to);
-      verification.valid = false;
+      // Only mark as missing if source also exists (meaning the move should have happened)
+      const sourcePath = path.join(workDir, task.from);
+      const sourceExists = await fs.pathExists(sourcePath);
+      if (sourceExists) {
+        verification.missing.push(task.to);
+        verification.valid = false;
+      }
+      // If source doesn't exist, the move was correctly skipped
     }
   }
 

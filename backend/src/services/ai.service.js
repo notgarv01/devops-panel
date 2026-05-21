@@ -2,12 +2,21 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
-// AI Service for build diagnostics
-// Supports both OpenAI and Google Gemini APIs
+// AI Service - Hybrid Architecture
+// Local AI for development, Cloud AI for production
 
 class AIService {
   constructor(apiKey = null) {
-    // Collect all available API keys
+    // Determine environment mode
+    this.isProduction = process.env.NODE_ENV === 'production';
+    this.isDevelopment = process.env.NODE_ENV === 'development';
+
+    // Local AI (Ollama) - Development mode
+    this.localAiUrl = process.env.LOCAL_AI_URL || 'http://localhost:11434/v1';
+    this.localModel = process.env.LOCAL_MODEL || 'llama3';
+    this.localApiKey = 'ollama'; // Ollama doesn't require real auth
+
+    // Cloud AI Keys
     this.claudeKeys = [
       process.env.CLAUDE_API_KEY,
       process.env.CLAUDE_API_KEY_2,
@@ -22,6 +31,7 @@ class AIService {
     this.openaiKey = process.env.OPENAI_API_KEY;
     this.openrouterKey = process.env.OPENROUTER_API_KEY;
 
+    // Base URLs
     this.geminiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta';
     this.openaiBaseUrl = process.env.AI_API_URL || 'https://api.openai.com/v1';
     this.openrouterBaseUrl = 'https://openrouter.ai/api/v1';
@@ -32,18 +42,161 @@ class AIService {
     this.currentClaudeIndex = 0;
     this.currentGeminiIndex = 0;
 
-    // Determine which API to use
+    // Determine which API to use based on environment
+    this.useLocal = false;
     this.useGemini = false;
     this.useClaude = false;
     this.useOpenRouter = false;
 
-    if (this.claudeKeys.length > 0) {
-      this.useClaude = true;
-    } else if (this.openrouterKey) {
-      this.useOpenRouter = true;
-    } else if (this.geminiKeys.length > 0) {
-      this.useGemini = true;
+    if (this.isDevelopment) {
+      // Development: Use local Ollama
+      this.useLocal = true;
+      console.log('[AI Service] Mode: DEVELOPMENT - Using local Ollama');
+    } else {
+      // Production: Use cloud AI
+      if (this.claudeKeys.length > 0) {
+        this.useClaude = true;
+      } else if (this.openrouterKey) {
+        this.useOpenRouter = true;
+      } else if (this.geminiKeys.length > 0) {
+        this.useGemini = true;
+      }
+      console.log('[AI Service] Mode: PRODUCTION - Using cloud AI');
     }
+  }
+
+  // Check if local AI is available
+  async checkLocalHealth() {
+    try {
+      const response = await axios.get(this.localAiUrl.replace('/v1', '/api/tags'), { timeout: 3000 });
+      return response.status === 200;
+    } catch {
+      return false;
+    }
+  }
+
+  // Call local Ollama AI
+  async callLocalAI(messages, options = {}) {
+    try {
+      const response = await axios.post(this.localAiUrl + '/chat/completions', {
+        model: this.localModel,
+        messages: messages,
+        max_tokens: options.max_tokens || 500,
+        temperature: options.temperature || 0.3
+      }, {
+        headers: {
+          'Authorization': `Bearer ${this.localApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 60000 // Local is slower, give it more time
+      });
+      return response.data;
+    } catch (error) {
+      console.error('[AI Service] Local Ollama call failed:', error.message);
+      throw error;
+    }
+  }
+
+  // Fallback: Try local, then cloud if local fails (for hybrid resilience)
+  async callWithHybridFallback(messages, options = {}) {
+    // Try local first in development
+    if (this.useLocal) {
+      try {
+        const isHealthy = await this.checkLocalHealth();
+        if (isHealthy) {
+          console.log('[AI Service] Using local Ollama...');
+          return await this.callLocalAI(messages, options);
+        }
+        console.log('[AI Service] Local Ollama not available, falling back to cloud...');
+      } catch (error) {
+        console.log('[AI Service] Local failed, falling back to cloud...');
+      }
+    }
+
+    // Fallback to cloud
+    return await this.callCloudAI(messages, options);
+  }
+
+  // Generic cloud AI call
+  async callCloudAI(messages, options = {}) {
+    if (this.useClaude && this.claudeKeys.length > 0) {
+      return await this.callClaude(messages, options);
+    } else if (this.useOpenRouter && this.openrouterKey) {
+      return await this.callOpenRouter(messages, options);
+    } else if (this.useGemini && this.geminiKeys.length > 0) {
+      return await this.callGemini(messages, options);
+    }
+    throw new Error('No cloud AI provider available');
+  }
+
+  // Claude API call
+  async callClaude(messages, options = {}) {
+    for (let i = 0; i < this.claudeKeys.length; i++) {
+      try {
+        const response = await axios.post('https://api.anthropic.com/v1/messages', {
+          model: this.model,
+          max_tokens: options.max_tokens || 500,
+          messages: messages
+        }, {
+          headers: {
+            'x-api-key': this.claudeKeys[i],
+            'anthropic-version': '2023-06-01',
+            'Content-Type': 'application/json'
+          },
+          timeout: 60000
+        });
+        return response.data;
+      } catch (error) {
+        if (error.response?.status === 429 || error.response?.status === 400) {
+          console.log(`[AI Service] Claude key ${i + 1} hit limit, trying next...`);
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error('All Claude keys exhausted');
+  }
+
+  // OpenRouter API call
+  async callOpenRouter(messages, options = {}) {
+    const response = await axios.post(this.openrouterBaseUrl + '/chat/completions', {
+      model: this.openrouterModel,
+      messages: messages,
+      max_tokens: options.max_tokens || 500,
+      temperature: options.temperature || 0.3
+    }, {
+      headers: {
+        'Authorization': `Bearer ${this.openrouterKey}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 60000
+    });
+    return response.data;
+  }
+
+  // Gemini API call
+  async callGemini(messages, options = {}) {
+    const prompt = messages.map(m => m.content).join('\n');
+    for (let i = 0; i < this.geminiKeys.length; i++) {
+      try {
+        const url = `${this.geminiBaseUrl}/models/${this.model}:generateContent?key=${this.geminiKeys[i]}`;
+        const response = await axios.post(url, {
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            maxOutputTokens: options.max_tokens || 500,
+            temperature: options.temperature || 0.3
+          }
+        }, { timeout: 30000 });
+        return response.data;
+      } catch (error) {
+        if (error.response?.status === 429) {
+          console.log(`[AI Service] Gemini key ${i + 1} hit limit, trying next...`);
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error('All Gemini keys exhausted');
   }
 
   // Get next Claude key (rotation)
@@ -193,11 +346,16 @@ class AIService {
 
   // Diagnose build failure from Vercel logs
   async diagnoseBuildFailure(buildLogs) {
-    const hasApiKey = this.geminiKey || this.openaiKey;
-    if (!hasApiKey) {
+    if (this.isDevelopment && !this.useLocal) {
       return {
         success: false,
-        error: 'AI diagnostic not configured. Set GEMINI_API_KEY or OPENAI_API_KEY in environment.'
+        error: 'AI diagnostic not configured. Set LOCAL_AI_URL or switch to production mode.'
+      };
+    }
+    if (!this.isDevelopment && this.claudeKeys.length === 0 && this.geminiKeys.length === 0 && !this.openaiKey) {
+      return {
+        success: false,
+        error: 'AI diagnostic not configured. Set CLAUDE_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY.'
       };
     }
 
@@ -225,27 +383,36 @@ class AIService {
       const systemPrompt = `You are a DevOps engineer. Briefly explain why this build failed in 2 sentences max.`;
 
       const userPrompt = `Build failed. Last 25 log lines:\n${logText}`;
+      const messages = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ];
 
       let response;
-      if (this.useClaude) {
+
+      if (this.useLocal) {
+        // Use hybrid fallback for local-first approach
+        const result = await this.callWithHybridFallback(messages, { max_tokens: 300, temperature: 0.2 });
+        response = result.choices?.[0]?.message?.content || result.text || 'Local AI response unavailable.';
+      } else if (this.useClaude && this.claudeKeys.length > 0) {
         const claudeRes = await axios.post('https://api.anthropic.com/v1/messages', {
           model: this.model,
           max_tokens: 500,
-          messages: [{ role: 'user', content: `${systemPrompt}\n\n${userPrompt}` }]
+          messages: messages
         }, {
-          headers: { 'x-api-key': this.claudeKey, 'anthropic-version': '2023-06-01' },
+          headers: {
+            'x-api-key': this.claudeKeys[0],
+            'anthropic-version': '2023-06-01'
+          },
           timeout: 60000
         });
         response = claudeRes.data?.content?.[0]?.text || 'AI Limit hit.';
-      } else if (this.useGemini) {
+      } else if (this.useGemini && this.geminiKeys.length > 0) {
         response = await this.geminiDiagnose(userPrompt, systemPrompt);
       } else {
         response = await this.request('POST', '/chat/completions', {
           model: this.model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
+          messages: messages,
           max_tokens: 300,
           temperature: 0.2
         });
@@ -271,17 +438,22 @@ class AIService {
 
   async geminiDiagnose(userPrompt, systemPrompt) {
     const fullPrompt = `${systemPrompt}\n\n${userPrompt}`;
-    const url = `${this.geminiBaseUrl}/models/${this.model}:generateContent?key=${this.geminiKey}`;
-
-    const response = await axios.post(url, {
-      contents: [{ parts: [{ text: fullPrompt }] }],
-      generationConfig: {
-        maxOutputTokens: 300,
-        temperature: 0.2
+    for (let i = 0; i < this.geminiKeys.length; i++) {
+      try {
+        const url = `${this.geminiBaseUrl}/models/${this.model}:generateContent?key=${this.geminiKeys[i]}`;
+        const response = await axios.post(url, {
+          contents: [{ parts: [{ text: fullPrompt }] }],
+          generationConfig: {
+            maxOutputTokens: 300,
+            temperature: 0.2
+          }
+        }, { timeout: 30000 });
+        return response.data?.candidates?.[0]?.content?.parts?.[0]?.text || 'AI Limit hit. Check Vercel Dashboard.';
+      } catch (error) {
+        console.log(`[Gemini] Diagnose failed, trying next key...`);
+        if (i === this.geminiKeys.length - 1) throw error;
       }
-    }, { timeout: 30000 });
-
-    return response.data?.candidates?.[0]?.content?.parts?.[0]?.text || 'AI Limit hit. Check Vercel Dashboard.';
+    }
   }
 
   // Phase 2: AI-Assisted Branch Surgery
@@ -428,11 +600,14 @@ Respond ONLY with valid JSON array of instructions. Example format:
   // The central nervous system - drives the AI as a Cloud Architect
   async generateMigrationPlan(repoStructure, packages = []) {
     // Check if any API key is available
-    if (this.claudeKeys.length === 0 && this.geminiKeys.length === 0 && !this.openaiKey) {
+    const hasLocal = await this.checkLocalHealth();
+    const hasCloudKeys = this.claudeKeys.length > 0 || this.geminiKeys.length > 0 || !!this.openaiKey || !!this.openrouterKey;
+
+    if (!hasLocal && !hasCloudKeys) {
       return {
         success: false,
         plan: null,
-        error: 'AI not configured. Set CLAUDE_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY.'
+        error: 'AI not configured. Set LOCAL_AI_URL, or cloud API keys.'
       };
     }
 
@@ -490,8 +665,27 @@ Generate the Master Migration Plan as STRICT JSON.`;
     let plan;
     let lastError = null;
 
-    // Try Claude keys with fallback
-    if (this.claudeKeys.length > 0) {
+    // Try Local AI first (if development mode)
+    if (this.isDevelopment && hasLocal) {
+      try {
+        console.log('[Architect] Trying local Ollama...');
+        const response = await this.callLocalAI([
+          { role: 'user', content: `${systemPrompt}\n\n${userPrompt}` }
+        ], { max_tokens: 1500, temperature: 0.2 });
+
+        const text = response.choices?.[0]?.message?.content || '{}';
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          plan = JSON.parse(jsonMatch[0]);
+          console.log('[Architect] Local Ollama succeeded!');
+        }
+      } catch (localError) {
+        console.log('[Architect] Local Ollama failed:', localError.message);
+      }
+    }
+
+    // Try Claude keys with fallback (if local didn't work or production mode)
+    if (!plan && this.claudeKeys.length > 0) {
       for (let keyIndex = 0; keyIndex < this.claudeKeys.length; keyIndex++) {
         const key = this.claudeKeys[keyIndex];
         try {

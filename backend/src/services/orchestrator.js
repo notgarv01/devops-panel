@@ -9,12 +9,14 @@ const { createGitHubService } = require('./github.service');
 const { createVercelService } = require('./vercel.service');
 const Project = require('../models/Project');
 const { createAIService, parseBuildError } = require('./ai.service');
-const { SecretSentinel } = require('./secretSentinel');
 const { architectAudit } = require('./architect');
 const { refactorMovedFiles } = require('./refactor.service');
 const { createAIRefactorService } = require('./aiRefactor');
 const { executeMigration, cleanupEmptyDirs, verifyMigration } = require('../utils/repoManager');
 const { splitPackageJson } = require('../utils/packageManager');
+// Unified AI Service - Hybrid Architecture (Local + Cloud)
+const { generateMigrationPlan: unifiedGeneratePlan, performBranchSurgery: unifiedSurgery, checkHealth: aiHealthCheck } = require('./unifiedAi');
+const { SecretSentinel } = require('./secretSentinel');
 
 // Project persistence helper - ensures project exists and updates status
 const updateProjectStatus = async (projectName, updates) => {
@@ -40,6 +42,46 @@ const emitProjectUpdate = (io, projectName, status, data = {}) => {
       ...data
     });
   }
+};
+
+// Execute surgery instructions (from unified AI or manual)
+const executeSurgeryInstructions = async (workDir, instructions, logs) => {
+  const results = { applied: 0, failed: 0, errors: [] };
+  const fs = require('fs');
+
+  if (!instructions || instructions.length === 0) {
+    return results;
+  }
+
+  for (const instruction of instructions) {
+    try {
+      const filePath = path.join(workDir, instruction.file);
+      if (!fs.existsSync(filePath)) {
+        logs?.emit('warning', `Surgery skip: ${instruction.file} not found`);
+        results.failed++;
+        continue;
+      }
+
+      let content = await fs.promises.readFile(filePath, 'utf8');
+      const original = content;
+
+      if (instruction.find && instruction.replace) {
+        content = content.replace(instruction.find, instruction.replace);
+      }
+
+      if (content !== original) {
+        await fs.promises.writeFile(filePath, content);
+        logs?.emit('info', `Surgery applied: ${instruction.file} - ${instruction.change}`);
+        results.applied++;
+      }
+    } catch (error) {
+      console.error(`[Surgery] Error on ${instruction.file}:`, error.message);
+      results.failed++;
+      results.errors.push(`${instruction.file}: ${error.message}`);
+    }
+  }
+
+  return results;
 };
 
 class LogStreamer {
@@ -545,25 +587,64 @@ const runTransformationPipeline = async (io, sessionId, config) => {
     // ===== PHASE 1.5: AI MIGRATION PLANNER =====
     logs.emit('info', `Phase 1.5: AI generating MigrationPlan...`);
 
-    const aiService = createAIService();
-    const migrationPlanResult = await aiService.generateMigrationPlan(
-      masterAudit.structure,
-      masterAudit.packages
-    );
+    // Try unified AI service first (Hybrid Architecture - local/cloud)
+    let migrationPlanResult = { success: false, error: null };
+
+    try {
+      const unifiedPlan = await unifiedGeneratePlan(masterAudit.structure);
+      if (unifiedPlan && Object.keys(unifiedPlan).length > 0) {
+        migrationPlanResult = {
+          success: true,
+          plan: unifiedPlan,
+          movesCount: unifiedPlan.moves?.length || 0
+        };
+        logs.emit('info', `[UNIFIED AI] MigrationPlan generated successfully`);
+      }
+    } catch (unifiedError) {
+      logs.emit('info', `[UNIFIED AI] Not available: ${unifiedError.message}`);
+    }
+
+    // Fallback to old aiService if unified failed
+    if (!migrationPlanResult.success) {
+      logs.emit('info', `Falling back to cloud AI service...`);
+      const aiService = createAIService();
+      migrationPlanResult = await aiService.generateMigrationPlan(
+        masterAudit.structure,
+        masterAudit.packages
+      );
+    }
 
     if (migrationPlanResult.success && migrationPlanResult.plan) {
-      logs.emit('info', `MigrationPlan: ${migrationPlanResult.movesCount} file moves`);
+      // 🔥 SCHEMA-AGNOSTIC FIX: Normalize the plan.moves regardless of what key name the AI used
+      let normalizedMoves = [];
+      const plan = migrationPlanResult.plan;
+
+      if (Array.isArray(plan)) {
+        normalizedMoves = plan; // AI returned a raw array
+      } else if (plan.moves && Array.isArray(plan.moves)) {
+        normalizedMoves = plan.moves; // Standard cloud model layout
+      } else if (plan.migrations && Array.isArray(plan.migrations)) {
+        normalizedMoves = plan.migrations; // Alternative local model layout
+      } else if (plan.fileMoves && Array.isArray(plan.fileMoves)) {
+        normalizedMoves = plan.fileMoves; // Another alternative
+      } else {
+        // Try to find ANY array property inside the object
+        const foundArray = Object.values(plan).find(val => Array.isArray(val));
+        if (foundArray) normalizedMoves = foundArray;
+      }
+
+      logs.emit('info', `MigrationPlan: ${normalizedMoves.length} file moves`);
 
       // ===== PHASE 1.5.5: ATOMIC FILE MIGRATION =====
       // Use the Atomic Mover (repoManager) instead of ai.service's version
-      const atomicResults = await executeMigration(workDir, migrationPlanResult.plan.moves, logs);
+      const atomicResults = await executeMigration(workDir, normalizedMoves, logs);
       logs.emit('info', `Atomic Move: ${atomicResults.moved} moved, ${atomicResults.skipped} skipped, ${atomicResults.failed} failed`);
 
       // Cleanup empty directories left behind
       await cleanupEmptyDirs(workDir);
 
       // Verify migration
-      const verification = await verifyMigration(workDir, migrationPlanResult.plan.moves);
+      const verification = await verifyMigration(workDir, normalizedMoves);
       if (verification.valid) {
         logs.emit('info', `Migration verified: all ${verification.found.length} files in place`);
       } else {
@@ -585,20 +666,24 @@ const runTransformationPipeline = async (io, sessionId, config) => {
       }
 
       // Execute refactor files (remove app.listen, etc.)
-      if (migrationPlanResult.plan.refactorFiles?.length > 0) {
-        logs.emit('info', `Refactoring ${migrationPlanResult.plan.refactorFiles.length} server files...`);
+      const planRefactorFiles = migrationPlanResult.plan?.refactorFiles ||
+                               migrationPlanResult.plan?.refactor_list || [];
+
+      if (Array.isArray(planRefactorFiles) && planRefactorFiles.length > 0) {
+        logs.emit('info', `Refactoring ${planRefactorFiles.length} server files...`);
+        const aiService = createAIService();
         const refactorResults = await aiService.executeMigrationPlan(workDir, {
-          refactorFiles: migrationPlanResult.plan.refactorFiles
+          refactorFiles: planRefactorFiles
         }, logs);
         logs.emit('info', `Refactor: ${refactorResults.refactored} refactored, ${refactorResults.failed} failed`);
       }
 
       // ===== PHASE 1.75: AI REFACTOR LOOP (Surgical Re-Wiring) =====
-      if (migrationPlanResult.plan?.refactorFiles?.length > 0) {
-        logs.emit('info', `Phase 1.75: AI Surgical Refactor (${migrationPlanResult.plan.refactorFiles.length} files)...`);
+      if (Array.isArray(planRefactorFiles) && planRefactorFiles.length > 0) {
+        logs.emit('info', `Phase 1.75: AI Surgical Refactor (${planRefactorFiles.length} files)...`);
 
         const aiRefactor = createAIRefactorService();
-        const refactorList = migrationPlanResult.plan.refactorFiles.map(f => path.join(workDir, f));
+        const refactorList = planRefactorFiles.map(f => path.join(workDir, f));
 
         const surgicalResults = await aiRefactor.batchRefactor(refactorList, migrationPlanResult.plan, logs);
         logs.emit('info', `Surgical Refactor: ${surgicalResults.refactored} fixed, ${surgicalResults.skipped} no-change, ${surgicalResults.failed} failed`);
@@ -627,22 +712,32 @@ const runTransformationPipeline = async (io, sessionId, config) => {
     // ===== PHASE 2: AI-ASSISTED BRANCH SURGERY =====
     logs.emit('info', `Phase 2: AI analyzing audit map for surgery...`);
 
-    const surgeryResult = await aiService.performBranchSurgery(discovery);
+    // Try unified AI surgery first
+    let surgeryResult = { success: false, instructions: [], error: null };
 
-    if (surgeryResult.success && surgeryResult.instructions?.length > 0) {
-      logs.emit('info', `AI generated ${surgeryResult.count} surgical instructions`);
+    try {
+      const unifiedSurgeryInstructions = await unifiedSurgery(discovery);
+      if (unifiedSurgeryInstructions && unifiedSurgeryInstructions.length > 0) {
+        surgeryResult = {
+          success: true,
+          instructions: unifiedSurgeryInstructions,
+          count: unifiedSurgeryInstructions.length
+        };
+        logs.emit('info', `[UNIFIED AI] Generated ${surgeryResult.count} surgical instructions`);
 
-      // Execute the surgery
-      const surgeryExecution = await aiService.executeSurgery(workDir, surgeryResult.instructions, logs);
-      logs.emit('info', `Surgery complete: ${surgeryExecution.applied} applied, ${surgeryExecution.failed} failed`);
-
-      if (surgeryExecution.failed > 0) {
-        logs.emit('warning', `Some surgical changes could not be applied`);
+        // Execute the surgery
+        const surgeryExecution = await executeSurgeryInstructions(workDir, surgeryResult.instructions, logs);
+        logs.emit('info', `Surgery complete: ${surgeryExecution.applied} applied, ${surgeryExecution.failed} failed`);
       }
-    } else if (!surgeryResult.success && surgeryResult.error) {
-      logs.emit('warning', `AI surgery skipped: ${surgeryResult.error}`);
-      // Apply basic surgery rules without AI
+    } catch (unifiedError) {
+      logs.emit('info', `[UNIFIED AI] Surgery not available: ${unifiedError.message}`);
+    }
+
+    // Fallback: Apply basic rule-based corrections
+    if (!surgeryResult.success) {
       logs.emit('info', `Applying rule-based corrections instead...`);
+    } else if (surgeryResult.failed > 0) {
+      logs.emit('warning', `Some surgical changes could not be applied`);
     } else {
       logs.emit('info', `No surgical corrections needed`);
     }
