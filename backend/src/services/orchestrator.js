@@ -349,14 +349,15 @@ async function performAICorrection(workDir, discovery, logs) {
           // Replace localhost URLs with environment variables
           content = content.replace(/['"]http:\/\/localhost:[^'"]+['"]/g, () => {
             if (isFrontend) {
-              return "import.meta.env.VITE_API_URL || '/'";
+              // On Vercel, use relative /api path (serverless rewrites handle it)
+              return "'/api'";
             }
             return "'process.env.API_URL'";
           });
 
           // Fix incorrect string literal usage of process.env.API_URL in frontend
           if (isFrontend) {
-            content = content.replace(/['"]process\.env\.API_URL['"]/g, "import.meta.env.VITE_API_URL || '/api'");
+            content = content.replace(/['"]process\.env\.API_URL['"]/g, "'/api'");
           }
 
           if (content !== originalContent) {
@@ -461,13 +462,13 @@ async function transmuteSourceCode(projectPath, discovery = {}) {
 
     // Replace localhost URLs with appropriate environment variables
     content = content.replace(/['"]http:\/\/localhost:[^'"]+['"]/g, () => {
-      // Use VITE_ prefix for frontend, NODE_ for backend
-      return isFrontend ? "import.meta.env.VITE_API_URL || '/'" : "'process.env.API_URL'";
+      // On Vercel, use relative /api path (serverless rewrites handle it)
+      return isFrontend ? "'/api'" : "'process.env.API_URL'";
     });
 
     // Fix incorrect string literal usage of process.env.API_URL in frontend
     if (isFrontend) {
-      content = content.replace(/['"]process\.env\.API_URL['"]/g, "import.meta.env.VITE_API_URL || '/api'");
+      content = content.replace(/['"]process\.env\.API_URL['"]/g, "'/api'");
     }
 
     if (content !== originalContent) {
