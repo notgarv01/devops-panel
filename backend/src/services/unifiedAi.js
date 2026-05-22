@@ -81,7 +81,7 @@ Return ONLY raw JSON object with no markdown formatting.`
         ],
         max_tokens: 800,
         temperature: 0.2
-      });
+      }, { timeout: 120000 }); // 2 minute timeout for local AI
 
       const content = response.choices[0].message.content;
       try {
@@ -150,7 +150,7 @@ async function performBranchSurgery(audit) {
         ],
         max_tokens: 800,
         temperature: 0.2
-      });
+      }, { timeout: 120000 }); // 2 minute timeout for local AI
 
       const text = response.choices[0].message.content;
       const jsonMatch = text.match(/\[[\s\S]*\]/);

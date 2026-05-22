@@ -87,7 +87,6 @@ export const useDeployStore = create((set, get) => ({
     try {
       // Join socket room FIRST with our session ID
       socket.emit('join-pipeline', newSessionId);
-      console.log('[Socket] Joined room:', newSessionId);
 
       // Call API with our session ID
       const result = await deployService.runPipeline({
@@ -102,7 +101,6 @@ export const useDeployStore = create((set, get) => ({
         }
       });
 
-      console.log('[Pipeline] Started:', result.sessionId);
       get().addLog({ level: 'success', message: `Pipeline started: ${result.sessionId}` });
 
       return result;
@@ -165,18 +163,15 @@ export const useDeployStore = create((set, get) => ({
 
 // Socket integration
 export const initializeSocketListeners = () => {
-  console.log('[Socket] Initializing listeners, socket id:', socket.id);
-
   socket.on('connect', () => {
-    console.log('[Socket] Connected:', socket.id);
+    // Connected silently
   });
 
   socket.on('disconnect', () => {
-    console.log('[Socket] Disconnected');
+    // Disconnected silently
   });
 
   const handlePipelineLog = (log) => {
-    console.log('[Socket] pipeline-log received:', log);
     const state = useDeployStore.getState();
     // Match by sessionId if present, otherwise show all logs
     if (!state.sessionId || log.sessionId === state.sessionId) {
@@ -188,7 +183,6 @@ export const initializeSocketListeners = () => {
   };
 
   const handlePipelineProgress = (progress) => {
-    console.log('[Socket] pipeline-progress received:', progress);
     const state = useDeployStore.getState();
     if (!state.sessionId || progress.sessionId === state.sessionId) {
       useDeployStore.getState().setProgress(progress);
@@ -209,13 +203,11 @@ export const initializeSocketListeners = () => {
   socket.on('pipeline-log', handlePipelineLog);
   socket.on('pipeline-progress', handlePipelineProgress);
   socket.on('pipeline-error', (err) => {
-    console.log('[Socket] pipeline-error received:', err);
     useDeployStore.getState().setError(err.error);
   });
 
   // Webhook-triggered events
   socket.on('webhook-triggered', (data) => {
-    console.log('[Socket] webhook-triggered:', data);
     useDeployStore.getState().setWebhookTriggered(true);
     useDeployStore.getState().setSessionId(data.sessionId);
     useDeployStore.getState().setStatus('transmuting');
@@ -227,7 +219,6 @@ export const initializeSocketListeners = () => {
 
   // Project status updates from orchestrator
   socket.on('project-update', (data) => {
-    console.log('[Socket] project-update:', data);
     // This is handled by the ProjectsGrid component via ProjectsGrid's own socket listener
     // Or we can broadcast to a global store
     useDeployStore.getState().addLog({

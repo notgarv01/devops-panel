@@ -349,15 +349,16 @@ async function performAICorrection(workDir, discovery, logs) {
           // Replace localhost URLs with environment variables
           content = content.replace(/['"]http:\/\/localhost:[^'"]+['"]/g, () => {
             if (isFrontend) {
-              // On Vercel, use relative /api path (serverless rewrites handle it)
-              return "'/api'";
+              // On Vercel, use empty base - components append /api themselves
+              return "''";
             }
             return "'process.env.API_URL'";
           });
 
           // Fix incorrect string literal usage of process.env.API_URL in frontend
           if (isFrontend) {
-            content = content.replace(/['"]process\.env\.API_URL['"]/g, "'/api'");
+            content = content.replace(/['"]process\.env\.API_URL['"]/g, "''");
+            content = content.replace(/VITE_API_URL\s*\|\|\s*['"][^'"]*['"]/g, "VITE_API_URL || ''");
           }
 
           if (content !== originalContent) {
@@ -384,6 +385,30 @@ async function performAICorrection(workDir, discovery, logs) {
         corrections.apiUrlsFixed += await fixApiUrls(backendDir, false);
       }
     }
+
+    // Fix CORS configuration in backend to allow Vercel frontend
+    const fixBackendCors = async () => {
+      const appJsPath = path.join(workDir, backendPath || 'backend', 'src', 'app.js');
+      if (!fs.existsSync(appJsPath)) return;
+
+      let content = await fs.promises.readFile(appJsPath, 'utf8');
+      const original = content;
+
+      // Replace literal string arrays like ['process.env.API_URL', ...] with '*'
+      content = content.replace(/origin:\s*\[.*?\]/gs, (match) => {
+        if (match.includes('process.env')) {
+          return "origin: '*'";
+        }
+        return match;
+      });
+
+      if (content !== original) {
+        await fs.promises.writeFile(appJsPath, content);
+        logs.emit('info', 'Fixed backend CORS configuration');
+      }
+    };
+
+    await fixBackendCors();
 
     logs.emit('info', `API URLs corrected: ${corrections.apiUrlsFixed} files`);
 
@@ -462,13 +487,13 @@ async function transmuteSourceCode(projectPath, discovery = {}) {
 
     // Replace localhost URLs with appropriate environment variables
     content = content.replace(/['"]http:\/\/localhost:[^'"]+['"]/g, () => {
-      // On Vercel, use relative /api path (serverless rewrites handle it)
-      return isFrontend ? "'/api'" : "'process.env.API_URL'";
+      // On Vercel, use empty base - components append /api themselves
+      return isFrontend ? "''" : "'process.env.API_URL'";
     });
 
     // Fix incorrect string literal usage of process.env.API_URL in frontend
     if (isFrontend) {
-      content = content.replace(/['"]process\.env\.API_URL['"]/g, "'/api'");
+      content = content.replace(/['"]process\.env\.API_URL['"]/g, "''");
     }
 
     if (content !== originalContent) {
@@ -1128,12 +1153,18 @@ const runTransformationPipeline = async (io, sessionId, config) => {
                                       fs.existsSync(path.join(workDir, 'client'));
             const outputDir = hasFrontendFolder ? 'frontend/dist' : 'dist';
 
+            // ✅ FIX: Explicit installCommand and buildCommand for MERN on Vercel
+            // Vercel only installs root deps by default - we need backend deps too
             const deploymentData = {
               name: vercelProjectName,  // Use user's project name for Vercel
               projectId: project.id,  // Link to existing project
               gitSource: {
                 type: 'github'
               },
+              // Install BOTH frontend AND backend dependencies (critical for MERN on Vercel)
+              installCommand: 'cd frontend && npm install && cd ../backend && npm install',
+              // Build frontend after deps are installed
+              buildCommand: 'cd frontend && npm run build',
               // For MERN/frontend projects, set output directory
               ...(projectType === 'MERN' && {
                 outputDirectory: outputDir

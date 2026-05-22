@@ -239,7 +239,15 @@ class VercelService {
 
   async getDeploymentEvents(deploymentId) {
     // Vercel provides deployment events/logs via this endpoint
-    return this.request('GET', `/v2/deployments/${deploymentId}/events`);
+    const response = await this.request('GET', `/v2/deployments/${deploymentId}/events`);
+    // DEBUG: Log the raw response structure
+    console.log('[Vercel] Events response type:', typeof response, Array.isArray(response) ? 'array' : 'object');
+    console.log('[Vercel] Events response keys:', response ? Object.keys(response).join(', ') : 'null');
+    // Vercel API returns { events: [...] } or [...] depending on version
+    if (response && response.events) {
+      return response.events;
+    }
+    return Array.isArray(response) ? response : [];
   }
 
   // Stream deployment logs with polling (for real-time UI updates)
@@ -247,20 +255,36 @@ class VercelService {
     const { interval = 3000, maxAttempts = 60 } = options;
     const seenLogs = new Set();
 
+    console.log(`[Vercel] Starting log stream for deployment: ${deploymentId}`);
+
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        const events = await this.getDeploymentEvents(deploymentId);
+        const rawEvents = await this.getDeploymentEvents(deploymentId);
 
-        if (events && events.length > 0) {
+        // Handle both array and object response formats
+        let events = rawEvents;
+        if (events && typeof events === 'object' && !Array.isArray(events)) {
+          events = events.events || [];
+        }
+        events = Array.isArray(events) ? events : [];
+
+        if (events.length > 0) {
           for (const event of events) {
             const logKey = `${event.type}-${event.timestamp}`;
 
             if (!seenLogs.has(logKey)) {
               seenLogs.add(logKey);
 
+              // DEBUG: Print all events to console
+              const payload = event.payload || {};
+              const msg = payload.text || payload.message || JSON.stringify(payload);
+              if (msg) {
+                console.log(`[Vercel Log ${attempt}] ${event.type}: ${msg.toString().substring(0, 200)}`);
+              }
+
               const logEntry = {
                 type: event.type,
-                message: event.payload?.message || event.payload?.text || JSON.stringify(event.payload),
+                message: payload.text || payload.message || JSON.stringify(payload),
                 timestamp: event.timestamp,
                 deploymentId
               };
@@ -351,6 +375,7 @@ class VercelService {
       withCache = true,
       env = [],
       buildCommand = null,
+      installCommand = null,  // ✅ FIX: Install backend dependencies for MERN on Vercel
       outputDirectory = null,
       rootDirectory = null,
       functions = null,
@@ -390,8 +415,14 @@ class VercelService {
     }
 
     // Force new deployment if requested
-    if (forceNew) {
-      body.forceNew = true;
+    if (forceNew) body.forceNew = true;
+
+    // ✅ FIX: Install BOTH frontend AND backend dependencies for MERN on Vercel
+    if (installCommand) {
+      body.installCommand = installCommand;
+    } else if (buildCommand && buildCommand.includes('frontend')) {
+      // Default: install both frontend and backend deps
+      body.installCommand = 'cd frontend && npm install && cd ../backend && npm install';
     }
 
     // Add build settings if provided

@@ -52,7 +52,7 @@ export default function DeploymentPanel() {
         const preview = await deployService.previewVercel(projectData.type);
         setVercelJsonPreview(preview.raw);
       } catch (err) {
-        console.error('Failed to preview vercel config:', err);
+        // Silent catch
       }
     }
     setCurrentView(VIEWS.DEPLOY);

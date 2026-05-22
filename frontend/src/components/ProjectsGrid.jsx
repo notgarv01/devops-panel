@@ -26,8 +26,7 @@ export default function ProjectsGrid({ vercelToken, onDeployNew }) {
 
     // Listen for real-time project updates
     socket.on('project-update', (data) => {
-      console.log('[ProjectsGrid] project-update:', data);
-      // Update the project in the list
+      // Update the project in the list silently
       setProjects(prev => prev.map(p =>
         p.name === data.projectName
           ? { ...p, status: data.status, vercelUrl: data.url || p.vercelUrl }
@@ -45,8 +44,7 @@ export default function ProjectsGrid({ vercelToken, onDeployNew }) {
       const data = await deployService.getProjects();
       setProjects(data || []);
     } catch (error) {
-      console.error('Failed to load projects:', error);
-      // Fallback to empty array - can be shown in command center mode
+      // Silent catch
     } finally {
       setLoading(false);
     }

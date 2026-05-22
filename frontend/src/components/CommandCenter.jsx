@@ -188,7 +188,7 @@ export default function CommandCenter() {
         envVars: envVars.filter(e => e.key && e.value)
       });
     } catch (err) {
-      console.error('Deploy failed:', err);
+      // Silent catch
     }
   };
 

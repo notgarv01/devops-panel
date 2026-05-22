@@ -100,7 +100,7 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
         setWebVitals(data);
       }
     } catch (error) {
-      console.error('Failed to load Web Vitals:', error);
+      // Silent catch
     } finally {
       setLoadingVitals(false);
     }
@@ -123,7 +123,7 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
       // For now, we'll simulate with empty data
       setDeployments([]);
     } catch (error) {
-      console.error('Failed to load deployments:', error);
+      // Silent catch
     } finally {
       setLoadingDeployments(false);
     }
@@ -142,9 +142,9 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
         deploymentId,
         action: 'rollback'
       });
-      console.log('Rollback triggered:', result);
+      // Silent catch
     } catch (error) {
-      console.error('Rollback failed:', error);
+      // Silent catch
     } finally {
       setRollingBack(false);
     }
