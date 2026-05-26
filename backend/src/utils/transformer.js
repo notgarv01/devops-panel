@@ -474,22 +474,27 @@ const injectPackageJsonType = async (workDir) => {
 
 // ===== STEP 8: THE GOLDEN VERCEL INJECTION (Zero-404) =====
 const injectGoldenTemplate = async (workDir, audit) => {
-  // Only use golden template if AI has standardized the structure
-  const hasFrontend = fs.existsSync(path.join(workDir, 'frontend'));
-  const hasBackend = fs.existsSync(path.join(workDir, "backend"));
+  // Detect ACTUAL folder names (case-sensitive on Linux/Vercel)
+  const hasFrontendLower = fs.existsSync(path.join(workDir, 'frontend'));
+  const hasFrontendUpper = fs.existsSync(path.join(workDir, 'Frontend'));
+  const hasBackendLower = fs.existsSync(path.join(workDir, 'backend'));
+  const hasBackendUpper = fs.existsSync(path.join(workDir, 'Backend'));
 
-  if (!hasFrontend || !hasBackend) {
-    console.log('[Transform] Not using golden template - AI standardization incomplete');
+  const frontendDir = (hasFrontendUpper ? 'Frontend' : (hasFrontendLower ? 'frontend' : null));
+  const backendDir = (hasBackendUpper ? 'Backend' : (hasBackendLower ? 'backend' : null));
+
+  if (!frontendDir || !backendDir) {
+    console.log('[Transform] Not using golden template - folders not found');
     return null;
   }
 
   // Zero-404 Vercel config - no builds array, uses rewrites instead
-  // Use forward slashes for cross-platform compatibility (Vercel is Linux)
+  // Use ACTUAL folder names for Linux/Vercel compatibility
   const goldenConfig = {
     "version": 2,
-    "installCommand": "cd frontend && npm install && cd ../backend && npm install",
-    "buildCommand": "cd frontend && npm run build",
-    "outputDirectory": "frontend/dist",
+    "installCommand": `cd ${frontendDir} && npm install && cd ../${backendDir} && npm install`,
+    "buildCommand": `cd ${frontendDir} && npm run build`,
+    "outputDirectory": `${frontendDir}/dist`,
     "framework": "vite",
     "rewrites": [
       { "source": "/api/(.*)", "destination": "/api/index.js" },
@@ -501,8 +506,8 @@ const injectGoldenTemplate = async (workDir, audit) => {
   await fsp.writeFile(vercelJsonPath, JSON.stringify(goldenConfig, null, 2));
 
   console.log('[Transform] === STEP 8: ZERO-404 CONFIG INJECTED ===');
-  console.log('  Build: cd frontend && npm install && npm run build');
-  console.log('  Output: frontend/dist');
+  console.log(`  Build: cd ${frontendDir} && npm install && npm run build`);
+  console.log(`  Output: ${frontendDir}/dist`);
   console.log('  Framework: vite');
   console.log('  Rewrites: /api/* -> /api/index.js, /* -> /index.html');
   console.log('  [No builds array - Vercel uses project settings correctly]');
@@ -652,14 +657,12 @@ const transformForDeployment = async (workDir, projectType, options = {}) => {
         const pkg = JSON.parse(await fsp.readFile(pkgPath, 'utf8'));
         pkg.scripts = pkg.scripts || {};
 
-        const hasFrontendFolder = fs.existsSync(path.join(workDir, 'frontend')) ||
-                                   fs.existsSync(path.join(workDir, 'client'));
+        // Detect ACTUAL folder names for Linux/Vercel (case-sensitive!)
+        const hasFrontendLower = fs.existsSync(path.join(workDir, 'frontend'));
+        const hasFrontendUpper = fs.existsSync(path.join(workDir, 'Frontend'));
+        const frontendDir = (hasFrontendUpper ? 'Frontend' : (hasFrontendLower ? 'frontend' : 'frontend'));
 
-        if (hasFrontendFolder) {
-          pkg.scripts['vercel-build'] = 'cd frontend && npm install && npm run build && cd ..';
-        } else {
-          pkg.scripts['vercel-build'] = 'npm install && npm run build';
-        }
+        pkg.scripts['vercel-build'] = `cd ${frontendDir} && npm install && npm run build && cd ..`;
 
         await fsp.writeFile(pkgPath, JSON.stringify(pkg, null, 2));
         console.log('[Transform] Added vercel-build script to package.json');

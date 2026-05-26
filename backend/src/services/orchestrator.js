@@ -922,6 +922,17 @@ const runTransformationPipeline = async (io, sessionId, config) => {
       }
 
       logs.emit('info', `Git add...`);
+
+      // Delete node_modules BEFORE adding to git (Windows permissions break on Linux)
+      const nodeModulesPaths = ['node_modules', 'Frontend/node_modules', 'Backend/node_modules'];
+      for (const nmPath of nodeModulesPaths) {
+        const fullPath = path.join(workDir, nmPath);
+        if (fs.existsSync(fullPath)) {
+          console.log(`[Git] Removing ${nmPath} (Windows permissions break on Vercel)`);
+          fs.rmSync(fullPath, { recursive: true, force: true });
+        }
+      }
+
       await git.add('.');  // Add all files
       // Explicitly add frontend and backend for MERN deployments
       await git.add('frontend').catch(() => {});  // Ignore if not exists

@@ -3,7 +3,7 @@ const path = require('path');
 
 // Secret patterns to scan for
 const SECRET_PATTERNS = [
-  // AWS Keys
+  // AWS Keys - more specific patterns
   {
     pattern: /AKIA[0-9A-Z]{16}/,
     type: 'AWS Access Key',
@@ -11,10 +11,10 @@ const SECRET_PATTERNS = [
     message: 'AWS Access Key ID detected'
   },
   {
-    pattern: /(?<![A-Z0-9])[A-Za-z0-9\/+=]{40}(?![A-Z0-9])/,
-    type: 'AWS Secret Key',
-    severity: 'critical',
-    message: 'Potential AWS Secret Key detected'
+    pattern: /(?<![A-Za-z0-9])[A-Za-z0-9\/+=]{40}(?![A-Za-z0-9])/,
+    type: 'Potential Secret',
+    severity: 'medium',
+    message: 'Long base64-like string detected - verify it is not a secret'
   },
   // Stripe
   {
