@@ -390,7 +390,7 @@ class VercelService {
 
     // Include projectId as query parameter for existing projects
     // NOT as part of the request body
-    const queryParams = ['skipAutoDetectionConfirmation=1'];  // Use auto framework detection
+    const queryParams = [];
     if (projectId) {
       queryParams.push(`projectId=${projectId}`);
     }

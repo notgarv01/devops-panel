@@ -37,7 +37,7 @@ const ProjectSchema = new mongoose.Schema({
   // Deployment status
   status: {
     type: String,
-    enum: ['live', 'building', 'failed', 'stopped', 'pending'],
+    enum: ['live', 'building', 'failed', 'stopped', 'pending', 'queued'],
     default: 'pending'
   },
   // Vercel info

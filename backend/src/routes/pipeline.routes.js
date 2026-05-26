@@ -17,18 +17,18 @@ const processDeployment = async (jobData, job) => {
   // Get io from global (set in index.js)
   const io = global.io;
 
-  // Safety: 5 minute timeout for entire pipeline
+  // Safety: 15 minute timeout for entire pipeline (AI + Vercel operations need more time)
   const pipelineTimeout = setTimeout(() => {
-    console.error(`[Pipeline:${id}] Pipeline timed out after 5 minutes`);
+    console.error(`[Pipeline:${id}] Pipeline timed out after 15 minutes`);
     if (io) {
       io.to(id).emit('pipeline-log', {
         sessionId: id,
         timestamp: new Date(),
         level: 'error',
-        message: 'Pipeline timed out after 5 minutes'
+        message: 'Pipeline timed out after 15 minutes'
       });
     }
-  }, 5 * 60 * 1000);
+  }, 15 * 60 * 1000);
 
   try {
     const result = await runTransformationPipeline(io, id, {
@@ -139,6 +139,7 @@ router.post('/run', async (req, res) => {
     } else {
       const newProject = new Project({
         name: projectName,
+        owner: userId || 'system',
         repoUrl: projectPath,
         githubUrl: projectPath,
         status: 'queued',
