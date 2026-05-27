@@ -122,7 +122,7 @@ const generateVercelConfig = (projectType, config = {}) => {
     return {
       version: 2,
       installCommand: 'cd frontend && npm install && cd ../backend && npm install',
-      buildCommand: 'cd frontend && npm install && npm run build',
+      buildCommand: 'cd frontend && npm run build',
       outputDirectory: 'frontend/dist',
       framework: 'vite',
       rewrites: [
@@ -474,19 +474,30 @@ const injectPackageJsonType = async (workDir) => {
 
 // ===== STEP 8: THE GOLDEN VERCEL INJECTION (Zero-404) =====
 const injectGoldenTemplate = async (workDir, audit) => {
-  // Detect ACTUAL folder names (case-sensitive on Linux/Vercel)
-  const hasFrontendLower = fs.existsSync(path.join(workDir, 'frontend'));
-  const hasFrontendUpper = fs.existsSync(path.join(workDir, 'Frontend'));
-  const hasBackendLower = fs.existsSync(path.join(workDir, 'backend'));
-  const hasBackendUpper = fs.existsSync(path.join(workDir, 'Backend'));
-
-  const frontendDir = (hasFrontendUpper ? 'Frontend' : (hasFrontendLower ? 'frontend' : null));
-  const backendDir = (hasBackendUpper ? 'Backend' : (hasBackendLower ? 'backend' : null));
-
-  if (!frontendDir || !backendDir) {
-    console.log('[Transform] Not using golden template - folders not found');
+  // ✅ FIX: Use readdir to get ACTUAL case-sensitive folder names
+  // fs.existsSync is case-insensitive on Windows but Vercel is Linux!
+  let actualFolders = [];
+  try {
+    const entries = await fsp.readdir(workDir, { withFileTypes: true });
+    actualFolders = entries
+      .filter(e => e.isDirectory())
+      .map(e => e.name);
+  } catch (e) {
+    console.log('[Transform] Could not read directory:', e.message);
     return null;
   }
+
+  // Find actual frontend and backend folder names (case-sensitive!)
+  const frontendDir = actualFolders.find(f => f.toLowerCase() === 'frontend');
+  const backendDir = actualFolders.find(f => f.toLowerCase() === 'backend');
+
+  if (!frontendDir || !backendDir) {
+    console.log('[Transform] Not using golden template - frontend/backend folders not found');
+    console.log(`[Transform] Actual folders: ${actualFolders.join(', ')}`);
+    return null;
+  }
+
+  console.log(`[Transform] Detected folders: frontend="${frontendDir}", backend="${backendDir}"`);
 
   // Zero-404 Vercel config - no builds array, uses rewrites instead
   // Use ACTUAL folder names for Linux/Vercel compatibility
@@ -521,8 +532,24 @@ const generateTailoredConfig = async (workDir, audit) => {
   // Support both new audit structure and legacy discovery
   const frontend = audit.frontend || {};
   const backend = audit.backend || {};
-  const frontendPath = frontend.path || audit.frontendPath || 'frontend';
-  const backendPath = backend.path || audit.backendPath || 'backend';
+
+  // ✅ FIX: Use readdir to get ACTUAL case-sensitive folder names
+  // fs.existsSync is case-insensitive on Windows but Vercel is Linux!
+  let actualFolders = [];
+  try {
+    const entries = await fsp.readdir(workDir, { withFileTypes: true });
+    actualFolders = entries.filter(e => e.isDirectory()).map(e => e.name);
+  } catch (e) {
+    console.log('[Transform] Could not read directory:', e.message);
+  }
+
+  // Find actual frontend and backend folder names (case-sensitive!)
+  const detectedFrontendDir = actualFolders.find(f => f.toLowerCase() === 'frontend');
+  const detectedBackendDir = actualFolders.find(f => f.toLowerCase() === 'backend');
+
+  // Use detected folder names, fallback to audit data
+  const frontendPath = detectedFrontendDir || frontend.path || audit.frontendPath || 'frontend';
+  const backendPath = detectedBackendDir || backend.path || audit.backendPath || 'backend';
   const buildScript = frontend.buildScript || audit.buildScript || 'npm run build';
   const outputDir = frontend.outDir || audit.outputDir || 'dist';
 
@@ -530,6 +557,8 @@ const generateTailoredConfig = async (workDir, audit) => {
     console.log('[Transform] No frontend detected, skipping vercel.json generation');
     return null;
   }
+
+  console.log(`[Transform] Using folder names: frontend="${frontendPath}", backend="${backendPath}"`);
 
   // Dynamic navigation based on audit
   const frontendDir = frontendPath === '.' ? '' : frontendPath;
@@ -549,7 +578,7 @@ const generateTailoredConfig = async (workDir, audit) => {
   const vercelConfig = {
     version: 2,
     buildCommand: buildCommand,
-    installCommand: 'cd frontend && npm install && cd ../backend && npm install',  // ✅ CRITICAL: Install BOTH deps for MERN
+    installCommand: `cd ${frontendPath} && npm install && cd ../${backendPath} && npm install`,  // ✅ CRITICAL: Install BOTH deps for MERN
     outputDirectory: outputDirectory,
     framework: 'vite',
     rewrites: [
@@ -657,10 +686,14 @@ const transformForDeployment = async (workDir, projectType, options = {}) => {
         const pkg = JSON.parse(await fsp.readFile(pkgPath, 'utf8'));
         pkg.scripts = pkg.scripts || {};
 
-        // Detect ACTUAL folder names for Linux/Vercel (case-sensitive!)
-        const hasFrontendLower = fs.existsSync(path.join(workDir, 'frontend'));
-        const hasFrontendUpper = fs.existsSync(path.join(workDir, 'Frontend'));
-        const frontendDir = (hasFrontendUpper ? 'Frontend' : (hasFrontendLower ? 'frontend' : 'frontend'));
+        // ✅ FIX: Use readdir to get ACTUAL case-sensitive folder names
+        let actualFolders = [];
+        try {
+          const entries = await fsp.readdir(workDir, { withFileTypes: true });
+          actualFolders = entries.filter(e => e.isDirectory()).map(e => e.name);
+        } catch (e) {}
+
+        const frontendDir = actualFolders.find(f => f.toLowerCase() === 'frontend') || 'frontend';
 
         pkg.scripts['vercel-build'] = `cd ${frontendDir} && npm install && npm run build && cd ..`;
 
