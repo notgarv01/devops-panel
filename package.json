@@ -11,6 +11,7 @@
     "dev:backend": "npm run dev --workspace=backend",
     "dev:frontend": "npm run dev --workspace=frontend",
     "build": "npm run build --workspace=frontend",
+    "start": "npm start --workspace=backend",
     "docker:up": "docker-compose up --build"
   },
   "devDependencies": {
