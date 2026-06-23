@@ -24,13 +24,19 @@ let aiClient;
 let activeModel;
 
 if (isProduction) {
-  // Production: Use cloud AI via OpenRouter
-  console.log('🚀 Panel is using CLOUD AI (OpenRouter Mode)');
-  aiClient = new OpenAI({
-    baseURL: 'https://openrouter.ai/api/v1',
-    apiKey: openrouterKey,
-  });
-  activeModel = openrouterModel;
+  // Production: Use cloud AI via OpenRouter if key is available
+  if (openrouterKey) {
+    console.log('🚀 Panel is using CLOUD AI (OpenRouter Mode)');
+    aiClient = new OpenAI({
+      baseURL: 'https://openrouter.ai/api/v1',
+      apiKey: openrouterKey,
+    });
+    activeModel = openrouterModel;
+  } else {
+    console.log('⚠️ Panel is running in PRODUCTION without AI credentials - AI features disabled');
+    aiClient = null;
+    activeModel = null;
+  }
 } else {
   // Development: Use local Ollama
   console.log('💻 Panel is using LOCAL AI (Ollama Mode)');
@@ -48,6 +54,12 @@ module.exports = { aiClient, activeModel };
  * 💻 REAL LOCAL AI: Generate migration plan using Ollama
  */
 async function generateMigrationPlan(repoTree) {
+  // If AI is not available, return default plan
+  if (!aiClient) {
+    console.log('⚠️ AI not available, using default migration plan');
+    return getDefaultMigrationPlan();
+  }
+
   if (!isProduction) {
     // DEVELOPMENT MODE: Use local Ollama AI
     console.log('💻 [Local AI] Generating migration plan with qwen2.5-coder:7b...');
@@ -124,7 +136,7 @@ Return ONLY raw JSON object with no markdown formatting.`
     }
   } catch (error) {
     console.error('❌ Cloud AI failed:', error.message);
-    throw error;
+    return getDefaultMigrationPlan();
   }
 }
 
@@ -132,6 +144,12 @@ Return ONLY raw JSON object with no markdown formatting.`
  * 💻 REAL LOCAL AI: Analyze audit map for surgery
  */
 async function performBranchSurgery(audit) {
+  // If AI is not available, return default instructions
+  if (!aiClient) {
+    console.log('⚠️ AI not available, using default surgery instructions');
+    return getDefaultSurgeryInstructions();
+  }
+
   // DEVELOPMENT MODE: Use local Ollama AI
   if (!isProduction) {
     console.log('💻 [Local AI] Generating surgical instructions...');
@@ -191,7 +209,7 @@ CRITICAL for package.json: dependency keys must be package names only (e.g. "exp
     return jsonMatch ? JSON.parse(jsonMatch[0]) : [];
   } catch (error) {
     console.error('❌ Cloud AI surgery failed:', error.message);
-    return [];
+    return getDefaultSurgeryInstructions();
   }
 }
 
