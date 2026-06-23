@@ -1,6 +1,7 @@
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const { sanitizePackageJsonDependencyKeys } = require('../utils/packageJsonSanitizer');
 
 // AI Service - Hybrid Architecture
 // Local AI for development, Cloud AI for production
@@ -479,7 +480,8 @@ Rules:
 1. Always ensure vite.config.js has base: '/'
 2. Replace localhost URLs with process.env.API_URL (backend) or import.meta.env.VITE_API_URL (frontend)
 3. Ensure vercel.json outputDirectory matches the audit outDir
-4. Keep instructions minimal and precise - max 5 instructions`;
+4. Keep instructions minimal and precise - max 5 instructions
+5. For package.json dependencies: keys must be package names ONLY (e.g. "express": "^5.2.1"). NEVER put versions in the key (WRONG: "express@^4.17.1": "^5.2.1")`;
 
       const userPrompt = `Based on this audit map, generate surgery instructions:
 ${auditSummary}
@@ -579,6 +581,10 @@ Respond ONLY with valid JSON array of instructions. Example format:
 
         if (instruction.find && instruction.replace) {
           content = content.replace(instruction.find, instruction.replace);
+        }
+
+        if (instruction.file.endsWith('package.json')) {
+          content = sanitizePackageJsonDependencyKeys(content);
         }
 
         if (content !== original) {

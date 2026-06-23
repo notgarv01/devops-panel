@@ -44,6 +44,8 @@ const emitProjectUpdate = (io, projectName, status, data = {}) => {
   }
 };
 
+const { sanitizePackageJsonDependencyKeys } = require('../utils/packageJsonSanitizer');
+
 // Execute surgery instructions (from unified AI or manual)
 const executeSurgeryInstructions = async (workDir, instructions, logs) => {
   const results = { applied: 0, failed: 0, errors: [] };
@@ -67,6 +69,10 @@ const executeSurgeryInstructions = async (workDir, instructions, logs) => {
 
       if (instruction.find && instruction.replace) {
         content = content.replace(instruction.find, instruction.replace);
+      }
+
+      if (instruction.file.endsWith('package.json')) {
+        content = sanitizePackageJsonDependencyKeys(content);
       }
 
       if (content !== original) {

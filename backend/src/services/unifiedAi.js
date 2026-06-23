@@ -141,7 +141,11 @@ async function performBranchSurgery(audit) {
         messages: [
           {
             role: 'system',
-            content: `You are a DevOps surgeon. Analyze the audit and return JSON array of surgical instructions with: file, change, find, replace. Return ONLY raw JSON array.`
+            content: `You are a DevOps surgeon. Analyze the audit and return JSON array of surgical instructions with: file, change, find, replace. Return ONLY raw JSON array.
+
+CRITICAL for package.json dependency updates:
+- Keys must be package names ONLY (e.g. "express"), NEVER include versions in the key (WRONG: "express@^4.17.1")
+- To upgrade express from ^4.17.1 to ^5.2.1, replace "express": "^4.17.1" with "express": "^5.2.1"`
           },
           {
             role: 'user',
@@ -169,7 +173,9 @@ async function performBranchSurgery(audit) {
       messages: [
         {
           role: 'system',
-          content: `You are a DevOps surgeon. Analyze the audit and return JSON array of instructions with: file, change, find, replace`
+          content: `You are a DevOps surgeon. Analyze the audit and return JSON array of instructions with: file, change, find, replace.
+
+CRITICAL for package.json: dependency keys must be package names only (e.g. "express"), never "express@^4.17.1".`
         },
         {
           role: 'user',
