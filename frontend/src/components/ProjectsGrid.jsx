@@ -13,7 +13,7 @@ import GitHubConnect from './GitHubConnect';
 import { deployService } from '../services/api';
 import socket from '../services/socket';
 
-export default function ProjectsGrid({ vercelToken, onDeployNew }) {
+export default function ProjectsGrid({ vercelToken, onDeployNew, onGoToLanding }) {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -153,6 +153,16 @@ export default function ProjectsGrid({ vercelToken, onDeployNew }) {
             >
               <RefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
             </button>
+            {onGoToLanding && (
+              <button
+                onClick={onGoToLanding}
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg hover:bg-zinc-800/50 text-zinc-400 hover:text-white transition-colors text-sm font-medium whitespace-nowrap"
+                title="Back to Home"
+              >
+                <Home className="w-4 h-4" />
+                <span className="hidden sm:inline">Home</span>
+              </button>
+            )}
             <button
               onClick={onDeployNew}
               className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 transition-colors text-sm font-medium whitespace-nowrap"
