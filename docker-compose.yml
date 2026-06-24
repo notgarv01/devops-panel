@@ -1,20 +1,20 @@
 services:
   mongo:
     image: mongo:7
-    container_name: devops-mongo
+    container_name: Auto-DeployX-mongo
     restart: unless-stopped
     ports:
       - "27017:27017"
     volumes:
       - mongo-data:/data/db
     networks:
-      - devops-network
+      - Auto-DeployX-network
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: devops-backend
+    container_name: Auto-DeployX-backend
     restart: unless-stopped
     ports:
       - "5000:5000"
@@ -25,7 +25,7 @@ services:
     depends_on:
       - mongo
     networks:
-      - devops-network
+      - Auto-DeployX-network
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - deploy-workdir:/tmp/deploys
@@ -34,17 +34,17 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: devops-frontend
+    container_name: Auto-DeployX-frontend
     restart: unless-stopped
     ports:
       - "80:80"
     depends_on:
       - backend
     networks:
-      - devops-network
+      - Auto-DeployX-network
 
 networks:
-  devops-network:
+  Auto-DeployX-network:
     driver: bridge
 
 volumes:

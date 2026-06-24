@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: devops-panel-backend
+    name: Auto-DeployX-backend
     env: node
     buildCommand: cd backend && npm install
     startCommand: cd backend && npm start

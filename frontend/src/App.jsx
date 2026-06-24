@@ -45,7 +45,7 @@ function App() {
                     <Zap className="w-5 h-5 text-white" />
                   </div>
                   <div className="min-w-0">
-                    <span className="block text-lg sm:text-xl font-bold text-white tracking-tight truncate">DevOps Panel</span>
+                    <span className="block text-lg sm:text-xl font-bold text-white tracking-tight truncate">Auto DeployX</span>
                     <span className="block text-[10px] text-zinc-500 -mt-0.5">Zero-Manual Infrastructure</span>
                   </div>
                 </div>
@@ -140,7 +140,7 @@ function App() {
                     <Zap className="w-5 h-5 text-white" />
                   </div>
                   <div className="min-w-0">
-                    <span className="block text-lg sm:text-xl font-bold text-white tracking-tight truncate">DevOps Panel</span>
+                    <span className="block text-lg sm:text-xl font-bold text-white tracking-tight truncate">Auto DeployX</span>
                     <span className="block text-[10px] text-zinc-500 -mt-0.5">Zero-Manual Infrastructure</span>
                   </div>
                 </div>

@@ -130,7 +130,7 @@ export default function ProjectsGrid({ vercelToken, onDeployNew, onGoToLanding }
               <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 to-purple-500 flex items-center justify-center flex-shrink-0">
                 <Zap className="w-4 h-4 text-white" />
               </div>
-              <span className="text-lg font-semibold text-white truncate">Fleet Manager</span>
+              <span className="text-lg font-semibold text-white truncate">X Fleet</span>
             </div>
             <span className="px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs flex-shrink-0">
               {projects.length} {projects.length === 1 ? 'Project' : 'Projects'}
