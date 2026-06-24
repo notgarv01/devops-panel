@@ -5,7 +5,8 @@ import {
   RefreshCw,
   Loader2,
   Zap,
-  Settings
+  Settings,
+  Home
 } from 'lucide-react';
 import ProjectCard from './ProjectCard';
 import ProjectModal from './ProjectModal';
