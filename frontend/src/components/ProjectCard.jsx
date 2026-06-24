@@ -68,6 +68,22 @@ const STATUS_CONFIG = {
     text: 'text-zinc-400',
     dot: 'bg-zinc-400',
     label: 'Pending'
+  },
+  stopped: {
+    color: 'bg-slate-500',
+    glow: '',
+    border: 'border-slate-500/30',
+    text: 'text-slate-400',
+    dot: 'bg-slate-400',
+    label: 'Stopped'
+  },
+  queued: {
+    color: 'bg-blue-500',
+    glow: 'shadow-[0_0_10px_rgba(59,130,246,0.3)]',
+    border: 'border-blue-500/30',
+    text: 'text-blue-400',
+    dot: 'bg-blue-400',
+    label: 'Queued'
   }
 };
 
