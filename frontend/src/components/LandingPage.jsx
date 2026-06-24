@@ -283,12 +283,10 @@ await mongoose.connect(process.env.MONGO_URI, {
       <footer>
         <div className="footer-left">
           <div className="logo-icon" style={{width:'20px',height:'20px',borderRadius:'4px',fontSize:'9px'}}>X</div>
-          Auto Deploy X — © 2025
+          Auto Deploy X
         </div>
         <div className="footer-right">
-          <button onClick={onGoToPanel} className="footer-link" style={{background:'none',border:'none',cursor:'pointer'}}>Dashboard</button>
-          <a href="#" className="footer-link">GitHub</a>
-          <span style={{color:'#333',fontSize:'12px'}}>Built for MERN Monorepos</span>
+          <span style={{color:'#555',fontSize:'13px'}}>Made by Garv Gupta</span>
         </div>
       </footer>
     </>
