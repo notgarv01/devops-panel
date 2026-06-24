@@ -185,7 +185,7 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/80 backdrop-blur-sm"
@@ -193,12 +193,12 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
       />
 
       {/* Modal */}
-      <div className="relative w-full max-w-2xl glass-card rounded-2xl overflow-hidden animate-slide-up">
+      <div className="relative w-full max-w-2xl max-h-[92vh] glass-card rounded-2xl overflow-hidden animate-slide-up flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-zinc-800/50">
-          <div>
-            <h2 className="text-xl font-semibold text-white">{name}</h2>
-            <p className="text-sm text-zinc-500">{owner}</p>
+        <div className="flex items-center justify-between gap-3 p-4 sm:p-6 border-b border-zinc-800/50 flex-shrink-0">
+          <div className="min-w-0">
+            <h2 className="text-lg sm:text-xl font-semibold text-white truncate">{name}</h2>
+            <p className="text-sm text-zinc-500 truncate">{owner}</p>
           </div>
           <button
             onClick={onClose}
@@ -209,13 +209,13 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-zinc-800/50">
+        <div className="flex border-b border-zinc-800/50 overflow-x-auto flex-shrink-0">
           {tabs.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={`
-                flex-1 flex items-center justify-center gap-2 px-4 py-3
+                flex-none sm:flex-1 flex items-center justify-center gap-2 px-4 py-3
                 text-sm font-medium transition-colors
                 ${activeTab === tab.id
                   ? 'text-cyan-400 border-b-2 border-cyan-400 bg-cyan-500/5'
@@ -224,17 +224,17 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
               `}
             >
               <tab.icon className="w-4 h-4" />
-              {tab.label}
+              <span className="whitespace-nowrap">{tab.label}</span>
             </button>
           ))}
         </div>
 
         {/* Content */}
-        <div className="p-6 max-h-[60vh] overflow-y-auto">
+        <div className="p-4 sm:p-6 overflow-y-auto">
           {activeTab === 'overview' && (
             <div className="space-y-6">
               {/* Status */}
-              <div className="flex items-center justify-between p-4 rounded-xl bg-zinc-900/50 border border-zinc-800/50">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-4 rounded-xl bg-zinc-900/50 border border-zinc-800/50">
                 <div className="flex items-center gap-3">
                   <div className={`
                     w-3 h-3 rounded-full
@@ -293,7 +293,7 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
               )}
 
               {/* Links */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {vercelUrl && (
                   <a
                     href={vercelUrl}
@@ -302,7 +302,7 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
                     className="flex items-center gap-3 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 transition-colors"
                   >
                     <Globe className="w-5 h-5 text-emerald-400" />
-                    <div>
+                    <div className="min-w-0">
                       <span className="text-sm font-medium text-emerald-400">Live Site</span>
                       <p className="text-xs text-emerald-400/60 truncate">{vercelUrl}</p>
                     </div>
@@ -317,7 +317,7 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
                     className="flex items-center gap-3 p-4 rounded-xl bg-zinc-800/50 border border-zinc-700/50 hover:bg-zinc-800 transition-colors"
                   >
                     <Github className="w-5 h-5 text-zinc-400" />
-                    <div>
+                    <div className="min-w-0">
                       <span className="text-sm font-medium text-zinc-300">GitHub</span>
                       <p className="text-xs text-zinc-500 truncate">{githubUrl}</p>
                     </div>
@@ -328,15 +328,15 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
 
               {/* Project Info */}
               <div className="space-y-3">
-                <div className="flex justify-between text-sm">
+                <div className="flex flex-col sm:flex-row sm:justify-between gap-1 text-sm">
                   <span className="text-zinc-500">Framework</span>
                   <span className="text-white capitalize">{framework || 'Unknown'}</span>
                 </div>
-                <div className="flex justify-between text-sm">
+                <div className="flex flex-col sm:flex-row sm:justify-between gap-1 text-sm">
                   <span className="text-zinc-500">Deploy Branch</span>
                   <span className="text-cyan-400 font-mono">{targetBranch || 'devops-deploy'}</span>
                 </div>
-                <div className="flex justify-between text-sm">
+                <div className="flex flex-col sm:flex-row sm:justify-between gap-1 text-sm">
                   <span className="text-zinc-500">Last Webhook</span>
                   <span className="text-zinc-400">
                     {lastWebhookAt ? new Date(lastWebhookAt).toLocaleString() : 'Never'}
@@ -401,7 +401,7 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
 
           {activeTab === 'domains' && (
             <div className="space-y-4">
-              <div className="flex gap-2">
+              <div className="flex flex-col sm:flex-row gap-2">
                 <input
                   type="text"
                   value={customDomain}
@@ -412,7 +412,7 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
                 <button
                   onClick={handleAddDomain}
                   disabled={!customDomain || addingDomain}
-                  className="px-6 py-3 rounded-xl bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 font-medium text-sm hover:bg-cyan-500/30 transition-colors disabled:opacity-50 flex items-center gap-2"
+                  className="px-6 py-3 rounded-xl bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 font-medium text-sm hover:bg-cyan-500/30 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {addingDomain ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -492,7 +492,7 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
                   </div>
 
                   {/* Metrics Grid */}
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div className="p-4 rounded-xl bg-zinc-900/50 border border-zinc-800/50 text-center">
                       <Activity className="w-5 h-5 text-cyan-400 mx-auto mb-2" />
                       <div className="text-2xl font-bold text-white">{webVitals.lcp?.toFixed(1)}s</div>
@@ -556,7 +556,7 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
               </div>
 
               {/* Add New Item */}
-              <div className="flex gap-2">
+              <div className="flex flex-col sm:flex-row gap-2">
                 <input
                   type="text"
                   value={edgeConfig.newKey}
@@ -585,11 +585,11 @@ export default function ProjectModal({ project, onClose, vercelToken }) {
                   {edgeConfig.items.map((item, idx) => (
                     <div
                       key={idx}
-                      className="flex items-center gap-3 p-3 rounded-lg bg-zinc-900/50 border border-zinc-800/50"
-                    >
-                      <span className="text-sm text-cyan-400 font-mono w-40 truncate">{item.key}</span>
-                      <span className="text-zinc-500">=</span>
-                      <span className="flex-1 text-sm text-zinc-300 font-mono truncate">{item.value}</span>
+                    className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 p-3 rounded-lg bg-zinc-900/50 border border-zinc-800/50"
+                  >
+                      <span className="text-sm text-cyan-400 font-mono w-full sm:w-40 truncate">{item.key}</span>
+                      <span className="hidden sm:inline text-zinc-500">=</span>
+                      <span className="w-full sm:flex-1 text-sm text-zinc-300 font-mono truncate">{item.value}</span>
                       <button className="p-1.5 rounded hover:bg-zinc-800 text-zinc-500 hover:text-red-400 transition-colors">
                         <Trash2 className="w-4 h-4" />
                       </button>

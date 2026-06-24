@@ -104,7 +104,7 @@ export default function ProjectScanner({ onProjectDetected, onError }) {
   };
 
   return (
-    <div className="bg-[#0F0F0F] border border-zinc-800 rounded-2xl p-8 relative overflow-hidden">
+    <div className="bg-[#0F0F0F] border border-zinc-800 rounded-2xl p-4 sm:p-8 relative overflow-hidden">
       {/* Glow effect on active */}
       {isScanning && (
         <div className="absolute inset-0 bg-gradient-to-r from-blue-500/5 via-purple-500/5 to-blue-500/5 animate-pulse" />
@@ -119,8 +119,8 @@ export default function ProjectScanner({ onProjectDetected, onError }) {
             <Scan className="w-6 h-6 text-zinc-400" />
           )}
         </div>
-        <div>
-          <h2 className="text-xl font-semibold text-white">Project Scanner</h2>
+        <div className="min-w-0">
+          <h2 className="text-lg sm:text-xl font-semibold text-white">Project Scanner</h2>
           <p className="text-sm text-zinc-500">Drop your folder to analyze project DNA</p>
         </div>
       </div>
@@ -131,7 +131,7 @@ export default function ProjectScanner({ onProjectDetected, onError }) {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         className={`
-          relative border-2 border-dashed rounded-xl p-10 transition-all duration-300 cursor-pointer
+          relative border-2 border-dashed rounded-xl p-5 sm:p-10 transition-all duration-300 cursor-pointer
           ${isDragging
             ? 'border-blue-500 bg-blue-500/10 scale-[1.02]'
             : isScanning
@@ -154,7 +154,7 @@ export default function ProjectScanner({ onProjectDetected, onError }) {
             <>
               <Loader2 className="w-12 h-12 text-blue-400 mb-4 animate-spin" />
               <p className="text-lg text-white mb-2">Scanning Project...</p>
-              <p className="text-sm text-zinc-500">{scanResult?.path}</p>
+              <p className="text-sm text-zinc-500 break-all">{scanResult?.path}</p>
 
               {/* Progress bar */}
               <div className="w-full max-w-xs mt-4 h-1 bg-zinc-800 rounded-full overflow-hidden">
@@ -180,13 +180,13 @@ export default function ProjectScanner({ onProjectDetected, onError }) {
       {scanResult && (
         <div className="mt-6 space-y-4 relative z-10">
           {/* Detected Type */}
-          <div className={`flex items-center gap-3 p-4 rounded-xl ${getTypeInfo()?.bg} border border-zinc-800`}>
+          <div className={`flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-xl ${getTypeInfo()?.bg} border border-zinc-800`}>
             <CheckCircle className={`w-6 h-6 ${getTypeInfo()?.color}`} />
-            <div className="flex-1">
+            <div className="flex-1 min-w-0">
               <p className="text-sm text-zinc-400">Detected Project Type</p>
               <p className={`text-lg font-semibold ${getTypeInfo()?.color}`}>
                 {getTypeInfo()?.label}
-                <span className="text-xs text-zinc-500 ml-2">
+                <span className="block sm:inline text-xs text-zinc-500 sm:ml-2">
                   ({Math.round(scanResult.confidence * 100)}% confidence)
                 </span>
               </p>
@@ -215,7 +215,7 @@ export default function ProjectScanner({ onProjectDetected, onError }) {
             </p>
             <div className="max-h-32 overflow-y-auto space-y-1">
               {scanResult.directories?.slice(0, 10).map((dir, i) => (
-                <p key={i} className="text-xs text-zinc-400 font-mono">
+                <p key={i} className="text-xs text-zinc-400 font-mono break-all">
                   📁 {dir}
                 </p>
               ))}

@@ -69,14 +69,14 @@ export default function EnvManager({ envVars = [], onChange, readOnly = false })
   ];
 
   return (
-    <div className="bg-[#0F0F0F] border border-zinc-800 rounded-2xl p-6">
+    <div className="bg-[#0F0F0F] border border-zinc-800 rounded-2xl p-4 sm:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="flex items-center gap-3 min-w-0">
           <div className="p-2 rounded-lg bg-zinc-800">
             <Key className="w-4 h-4 text-zinc-400" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h3 className="text-sm font-semibold text-zinc-300">Environment Variables</h3>
             <p className="text-xs text-zinc-600">{envVars.filter(e => e.key).length} configured</p>
           </div>
@@ -123,7 +123,7 @@ export default function EnvManager({ envVars = [], onChange, readOnly = false })
       {/* Env Vars List */}
       <div className="space-y-2">
         {envVars.map((env, index) => (
-          <div key={index} className="group flex gap-2 items-center p-2.5 rounded-lg bg-zinc-900/30 border border-zinc-800/50 hover:border-zinc-700 transition-colors">
+          <div key={index} className="group flex flex-col sm:flex-row gap-2 sm:items-center p-2.5 rounded-lg bg-zinc-900/30 border border-zinc-800/50 hover:border-zinc-700 transition-colors">
             {/* Key */}
             <input
               type="text"
@@ -131,10 +131,10 @@ export default function EnvManager({ envVars = [], onChange, readOnly = false })
               onChange={(e) => handleChange(index, 'key', e.target.value)}
               placeholder="KEY"
               disabled={readOnly}
-              className="w-28 bg-transparent border-none text-xs font-mono text-zinc-300 placeholder-zinc-600 focus:outline-none disabled:cursor-not-allowed uppercase"
+              className="w-full sm:w-28 bg-transparent border-none text-xs font-mono text-zinc-300 placeholder-zinc-600 focus:outline-none disabled:cursor-not-allowed uppercase"
             />
 
-            <span className="text-zinc-700 text-xs">=</span>
+            <span className="hidden sm:inline text-zinc-700 text-xs">=</span>
 
             {/* Value */}
             <input
@@ -143,11 +143,11 @@ export default function EnvManager({ envVars = [], onChange, readOnly = false })
               onChange={(e) => handleChange(index, 'value', e.target.value)}
               placeholder="value"
               disabled={readOnly}
-              className="flex-1 bg-transparent border-none text-xs font-mono text-zinc-300 placeholder-zinc-600 focus:outline-none disabled:cursor-not-allowed"
+              className="w-full sm:flex-1 bg-transparent border-none text-xs font-mono text-zinc-300 placeholder-zinc-600 focus:outline-none disabled:cursor-not-allowed"
             />
 
             {/* Actions */}
-            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="flex items-center gap-1 self-end sm:self-auto opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
               <button
                 onClick={() => copyAsEnvFormat(env)}
                 className="p-1 text-zinc-600 hover:text-zinc-400 rounded"

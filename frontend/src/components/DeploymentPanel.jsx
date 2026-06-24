@@ -136,9 +136,9 @@ export default function DeploymentPanel() {
   };
 
   return (
-    <div className="max-w-2xl mx-auto mt-8">
+    <div className="max-w-2xl mx-auto mt-6 sm:mt-8 px-4 sm:px-0">
       {/* Progress Steps */}
-      <div className="flex items-center justify-center gap-2 mb-8">
+      <div className="flex items-center justify-start sm:justify-center gap-2 mb-6 sm:mb-8 overflow-x-auto pb-2">
         {['Scan', 'Configure', 'Deploy'].map((step, i) => {
           const stepKey = Object.values(VIEWS)[i];
           const isActive = currentView === stepKey || (i === 2 && currentView === VIEWS.SUCCESS);
@@ -153,7 +153,7 @@ export default function DeploymentPanel() {
               `}>
                 {isComplete ? <CheckCircle2 className="w-5 h-5" /> : i + 1}
               </div>
-              <span className={`ml-2 text-sm ${isActive || isComplete ? 'text-white' : 'text-zinc-600'}`}>
+              <span className={`ml-2 text-sm whitespace-nowrap ${isActive || isComplete ? 'text-white' : 'text-zinc-600'}`}>
                 {step}
               </span>
               {i < 2 && (
@@ -167,14 +167,14 @@ export default function DeploymentPanel() {
       {/* Deployment Card */}
       <div className="bg-[#0F0F0F] border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden">
         {/* Header */}
-        <div className="p-6 border-b border-zinc-800 bg-gradient-to-r from-zinc-900/50 to-transparent">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
+        <div className="p-4 sm:p-6 border-b border-zinc-800 bg-gradient-to-r from-zinc-900/50 to-transparent">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
               <div className="p-2 rounded-xl bg-gradient-to-br from-blue-500/20 to-purple-500/20 border border-blue-500/20">
                 <Rocket className="w-6 h-6 text-blue-400" />
               </div>
-              <div>
-                <h2 className="text-xl font-semibold text-white">Deploy Project</h2>
+              <div className="min-w-0">
+                <h2 className="text-lg sm:text-xl font-semibold text-white">Deploy Project</h2>
                 <p className="text-sm text-zinc-500">
                   {currentView === VIEWS.SCANNER && 'Start by scanning your project'}
                   {currentView === VIEWS.CONFIG && 'Configure your deployment settings'}
@@ -202,7 +202,7 @@ export default function DeploymentPanel() {
         )}
 
         {/* Content */}
-        <div className="p-6 space-y-6">
+        <div className="p-4 sm:p-6 space-y-6">
           {/* VIEW A: Project Scanner */}
           {currentView === VIEWS.SCANNER && (
             <ProjectScanner onProjectDetected={handleProjectDetected} onError={setError} />
@@ -239,7 +239,7 @@ export default function DeploymentPanel() {
                   Deployment Settings
                 </h3>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs text-zinc-500 mb-1.5">Project Name</label>
                     <input
@@ -291,7 +291,7 @@ export default function DeploymentPanel() {
                 </div>
 
                 {/* Vercel-ify Toggle */}
-                <div className="flex items-center justify-between p-4 rounded-xl bg-zinc-900/50 border border-zinc-800">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl bg-zinc-900/50 border border-zinc-800">
                   <div className="flex items-center gap-3">
                     <div className="p-2 rounded-lg bg-emerald-500/20">
                       <Zap className="w-5 h-5 text-emerald-400" />
@@ -304,7 +304,7 @@ export default function DeploymentPanel() {
                   <button
                     onClick={() => setAutoGenerateConfig(!autoGenerateConfig)}
                     className={`
-                      relative w-12 h-6 rounded-full transition-colors
+                      relative w-12 h-6 rounded-full transition-colors flex-shrink-0
                       ${autoGenerateConfig ? 'bg-emerald-500' : 'bg-zinc-700'}
                     `}
                   >
@@ -320,7 +320,7 @@ export default function DeploymentPanel() {
               <EnvManager envVars={envVars} onChange={setEnvVars} />
 
               {/* Actions */}
-              <div className="flex gap-3">
+              <div className="flex flex-col sm:flex-row gap-3">
                 <button
                   onClick={() => setCurrentView(VIEWS.SCANNER)}
                   className="flex-1 py-3 rounded-lg border border-zinc-700 text-zinc-400 hover:bg-zinc-800 transition-colors"
@@ -414,7 +414,7 @@ export default function DeploymentPanel() {
               </div>
 
               {/* Links */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <a
                   href={deployResult.repoUrl}
                   target="_blank"

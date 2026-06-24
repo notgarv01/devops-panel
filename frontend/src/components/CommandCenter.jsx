@@ -206,18 +206,18 @@ export default function CommandCenter() {
   const isComplete = status === 'live' && deployResult;
 
   return (
-    <div className="min-h-screen bg-black relative overflow-hidden">
+    <div className="min-h-screen bg-black relative overflow-x-hidden">
       {/* Ambient Background */}
       <div className="absolute inset-0 pointer-events-none">
         <div className="absolute top-0 left-1/4 w-96 h-96 bg-cyan-500/5 rounded-full blur-3xl" />
         <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-purple-500/5 rounded-full blur-3xl" />
       </div>
 
-      <div className="relative z-10 h-screen flex flex-col">
+      <div className="relative z-10 min-h-screen flex flex-col">
         {/* ===== MAIN CONTENT - HORIZONTAL LAYOUT ===== */}
-        <div className="flex-1 flex gap-6 p-6 overflow-hidden">
+        <div className="flex-1 flex flex-col xl:flex-row gap-4 sm:gap-6 p-4 sm:p-6 xl:overflow-hidden">
           {/* ===== LEFT: INPUT CARD (30%) ===== */}
-          <div className="w-[30%] glass-card rounded-2xl p-6 flex flex-col overflow-y-auto">
+          <div className="w-full xl:w-[34%] 2xl:w-[30%] glass-card rounded-2xl p-4 sm:p-6 flex flex-col xl:overflow-y-auto">
             {/* Status Bar */}
             <div className="flex items-center justify-between mb-4">
               <StatusBadge status={status} size="md" />
@@ -345,7 +345,7 @@ export default function CommandCenter() {
             {/* Deploy Mode */}
             <div className="mb-4">
               <label className="block text-xs text-zinc-500 mb-3">Deploy Mode</label>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {/* Fast Deploy */}
                 <button
                   onClick={() => setDeployMode('fast')}
@@ -434,26 +434,26 @@ export default function CommandCenter() {
                   {envVars.filter(e => e.key).map((env, index) => (
                     <div
                       key={index}
-                      className="env-row group flex items-center gap-2 p-2 rounded-lg bg-zinc-900/30 border border-zinc-800/30 hover:border-zinc-700/50 transition-colors animate-pop-in"
-                    >
+                    className="env-row group flex flex-col sm:flex-row sm:items-center gap-2 p-2 rounded-lg bg-zinc-900/30 border border-zinc-800/30 hover:border-zinc-700/50 transition-colors animate-pop-in"
+                  >
                       <input
                         type="text"
                         value={env.key}
                         onChange={(e) => handleEnvChange(index, 'key', e.target.value)}
                         placeholder="KEY"
                         disabled={isRunning}
-                        className="w-24 bg-transparent border-none text-xs font-mono text-zinc-300 uppercase placeholder-zinc-600 focus:outline-none disabled:cursor-not-allowed"
+                        className="w-full sm:w-24 bg-transparent border-none text-xs font-mono text-zinc-300 uppercase placeholder-zinc-600 focus:outline-none disabled:cursor-not-allowed"
                       />
-                      <span className="text-zinc-600 text-xs">=</span>
+                      <span className="hidden sm:inline text-zinc-600 text-xs">=</span>
                       <input
                         type={showEnvValues ? 'text' : 'password'}
                         value={env.value}
                         onChange={(e) => handleEnvChange(index, 'value', e.target.value)}
                         placeholder="***"
                         disabled={isRunning}
-                        className="flex-1 bg-transparent border-none text-xs font-mono text-zinc-300 placeholder-zinc-600 focus:outline-none disabled:cursor-not-allowed"
+                        className="w-full sm:flex-1 bg-transparent border-none text-xs font-mono text-zinc-300 placeholder-zinc-600 focus:outline-none disabled:cursor-not-allowed"
                       />
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center gap-1 self-end sm:self-auto opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                         <button
                           onClick={() => handleRemoveEnv(index)}
                           disabled={isRunning || envVars.length === 1}
@@ -541,8 +541,8 @@ export default function CommandCenter() {
           </div>
 
           {/* ===== RIGHT: TRANSFORMATION LOGS (60%) ===== */}
-          <div className="w-[60%] glass-card rounded-2xl overflow-hidden flex flex-col">
-            <div className="p-4 border-b border-zinc-800/50 flex items-center justify-between flex-shrink-0">
+          <div className="w-full xl:w-[66%] 2xl:w-[60%] min-h-[50vh] xl:min-h-0 glass-card rounded-2xl overflow-hidden flex flex-col">
+            <div className="p-4 border-b border-zinc-800/50 flex items-center justify-between gap-3 flex-shrink-0">
               <div className="flex items-center gap-2">
                 <Terminal className="w-4 h-4 text-emerald-400" />
                 <span className="text-sm font-medium text-zinc-300">Transformation Feed</span>
@@ -558,20 +558,20 @@ export default function CommandCenter() {
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 bg-black/30 font-mono text-sm">
+            <div className="flex-1 min-h-[360px] xl:min-h-0 overflow-y-auto p-3 sm:p-4 bg-black/30 font-mono text-sm">
               {logs.length > 0 ? (
                 <div className="space-y-1">
                   {logs.map((log) => (
                     <div
                       key={log.id}
-                      className={`flex items-start gap-3 text-xs leading-relaxed ${
+                      className={`flex items-start gap-2 sm:gap-3 text-xs leading-relaxed ${
                         log.level === 'success' ? 'text-emerald-400' :
                         log.level === 'error' ? 'text-red-400' :
                         log.level === 'warning' ? 'text-amber-400' :
                         'text-zinc-400'
                       }`}
                     >
-                      <span className="text-zinc-600 w-20 flex-shrink-0">
+                      <span className="text-zinc-600 w-16 sm:w-20 flex-shrink-0">
                         {new Date(log.timestamp).toLocaleTimeString()}
                       </span>
                       <span className="w-4 text-center flex-shrink-0">
@@ -579,7 +579,7 @@ export default function CommandCenter() {
                          log.level === 'error' ? '✗' :
                          log.level === 'warning' ? '!' : '›'}
                       </span>
-                      <span className="whitespace-pre-wrap">{log.message}</span>
+                      <span className="min-w-0 whitespace-pre-wrap break-words">{log.message}</span>
                     </div>
                   ))}
                 </div>
@@ -593,7 +593,7 @@ export default function CommandCenter() {
           </div>
 
           {/* ===== FAR RIGHT: STATUS SPACER (10%) ===== */}
-          <div className="w-[10%]" />
+          <div className="hidden 2xl:block 2xl:w-[10%]" />
         </div>
 
         {/* ===== COMMAND BAR (Fixed Bottom) ===== */}

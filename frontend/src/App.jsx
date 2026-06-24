@@ -26,15 +26,15 @@ function App() {
         <>
           {/* Fleet Manager Header */}
           <header className="sticky top-0 z-40 bg-black/90 backdrop-blur-xl border-b border-zinc-800/50">
-            <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-              <div className="flex items-center gap-6">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-4 lg:gap-6 min-w-0">
                 {/* Logo */}
-                <div className="flex items-center gap-3 cursor-pointer" onClick={handleBackToFleet}>
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 via-purple-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+                <div className="flex items-center gap-3 min-w-0 cursor-pointer" onClick={handleBackToFleet}>
+                  <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-cyan-500 via-purple-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-cyan-500/20 flex-shrink-0">
                     <Zap className="w-5 h-5 text-white" />
                   </div>
-                  <div>
-                    <span className="text-xl font-bold text-white tracking-tight">DevOps Panel</span>
+                  <div className="min-w-0">
+                    <span className="block text-lg sm:text-xl font-bold text-white tracking-tight truncate">DevOps Panel</span>
                     <span className="block text-[10px] text-zinc-500 -mt-0.5">Zero-Manual Infrastructure</span>
                   </div>
                 </div>
@@ -71,8 +71,8 @@ function App() {
               </div>
 
               {/* Status */}
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2 text-xs">
+              <div className="flex items-center gap-4 flex-shrink-0">
+                <div className="hidden sm:flex items-center gap-2 text-xs">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                   <span className="text-zinc-500">Systems Online</span>
                 </div>
@@ -109,14 +109,14 @@ function App() {
         <>
           {/* Deploy View Header */}
           <header className="sticky top-0 z-40 bg-black/90 backdrop-blur-xl border-b border-zinc-800/50">
-            <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-              <div className="flex items-center gap-6">
-                <div className="flex items-center gap-3 cursor-pointer" onClick={handleBackToFleet}>
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 via-purple-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-4 lg:gap-6 min-w-0">
+                <div className="flex items-center gap-3 min-w-0 cursor-pointer" onClick={handleBackToFleet}>
+                  <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-cyan-500 via-purple-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-cyan-500/20 flex-shrink-0">
                     <Zap className="w-5 h-5 text-white" />
                   </div>
-                  <div>
-                    <span className="text-xl font-bold text-white tracking-tight">DevOps Panel</span>
+                  <div className="min-w-0">
+                    <span className="block text-lg sm:text-xl font-bold text-white tracking-tight truncate">DevOps Panel</span>
                     <span className="block text-[10px] text-zinc-500 -mt-0.5">Zero-Manual Infrastructure</span>
                   </div>
                 </div>
@@ -141,7 +141,7 @@ function App() {
 
               <button
                 onClick={handleBackToFleet}
-                className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
+                className="hidden sm:inline text-sm text-zinc-500 hover:text-zinc-300 transition-colors flex-shrink-0"
               >
                 Back to Fleet
               </button>
@@ -169,7 +169,7 @@ function App() {
           </div>
 
           {/* Main Content */}
-          <main className="h-[calc(100vh-140px)]">
+          <main className="min-h-[calc(100vh-120px)]">
             <CommandCenter />
           </main>
         </>

@@ -86,8 +86,8 @@ export default function ProjectsGrid({ vercelToken, onDeployNew }) {
   if (projects.length === 0) {
     return (
       <div className="min-h-screen bg-black flex flex-col">
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center max-w-md px-6">
+        <div className="flex-1 flex items-center justify-center px-4">
+          <div className="text-center max-w-md">
             <div className="w-16 h-16 rounded-2xl bg-zinc-900/50 border border-zinc-800/50 flex items-center justify-center mx-auto mb-6">
               <Grid3X3 className="w-8 h-8 text-zinc-600" />
             </div>
@@ -123,20 +123,20 @@ export default function ProjectsGrid({ vercelToken, onDeployNew }) {
     <div className="min-h-screen bg-black">
       {/* Header */}
       <header className="sticky top-0 z-40 bg-black/80 backdrop-blur-xl border-b border-zinc-800/50">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 to-purple-500 flex items-center justify-center">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 to-purple-500 flex items-center justify-center flex-shrink-0">
                 <Zap className="w-4 h-4 text-white" />
               </div>
-              <span className="text-lg font-semibold text-white">Fleet Manager</span>
+              <span className="text-lg font-semibold text-white truncate">Fleet Manager</span>
             </div>
-            <span className="px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs">
+            <span className="px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs flex-shrink-0">
               {projects.length} {projects.length === 1 ? 'Project' : 'Projects'}
             </span>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto pb-1 sm:pb-0">
             {/* GitHub Connection Status */}
             <GitHubConnect
               connected={githubConnected}
@@ -155,7 +155,7 @@ export default function ProjectsGrid({ vercelToken, onDeployNew }) {
             </button>
             <button
               onClick={onDeployNew}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 transition-colors text-sm font-medium"
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 transition-colors text-sm font-medium whitespace-nowrap"
             >
               <Plus className="w-4 h-4" />
               New Deploy
@@ -165,8 +165,8 @@ export default function ProjectsGrid({ vercelToken, onDeployNew }) {
       </header>
 
       {/* Grid */}
-      <main className="max-w-7xl mx-auto px-6 py-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
           {projects.map((project, index) => (
             <div
               key={project._id}
